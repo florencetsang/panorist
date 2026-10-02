@@ -1,6 +1,16 @@
 {
+  "type": "module",
+  "scripts": {
+    "db:setup": "node scripts/db-setup.mjs",
+    "typecheck": "tsc --noEmit"
+  },
   "dependencies": {
     "@neon/config": "^1.8.3",
-    "@neon/env": "^1.4.8"
+    "@neon/env": "^1.4.8",
+    "@neondatabase/serverless": "^1.2.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.4",
+    "typescript": "^7.0.2"
   }
 }

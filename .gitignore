@@ -1,3 +1,5 @@
 .neon
 .env.local
 node_modules/
+.idea
+.agents
