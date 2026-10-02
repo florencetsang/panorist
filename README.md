@@ -53,8 +53,11 @@ demand, not cost-efficiency.
 Indexes: `reports(user_id, created_at DESC)` for the report list, and
 `preferences(frequency, delivery_hour)` for "who is due now" lookups.
 
-The data-access layer lives in `lib/db.ts` (typed helpers, plain SQL through the
-Neon HTTP driver). Scheduling semantics: a user is due when the **local** hour in
+The data-access layer is split in two: `lib/types.ts` holds the shared types and
+`CATEGORY_SLUGS` (pure — safe to import from client components), while `lib/db.ts`
+holds the typed helpers (plain SQL through the Neon HTTP driver) and starts with
+`import 'server-only'`, so any accidental client import fails the build with a
+clear error. Scheduling semantics: a user is due when the **local** hour in
 their IANA timezone matches `delivery_hour` — the timezone conversion is done by
 Postgres (`AT TIME ZONE`) so DST and half-hour zones are handled for us. Weekly
 users are due on Mondays, local time.
@@ -65,8 +68,11 @@ users are due on Mondays, local time.
 db/schema.sql        CREATE TABLE + indexes (idempotent)
 db/seed.sql         one test user + preferences (idempotent)
 scripts/db-setup.mjs runs schema.sql then seed.sql (npm run db:setup)
-scripts/smoke.ts    exercises every lib/db.ts helper (node --env-file=.env.local scripts/smoke.ts)
-lib/db.ts            typed data-access layer (Neon serverless driver)
+scripts/smoke.ts    exercises every lib/db.ts helper
+                    (node --env-file=.env.local --conditions react-server scripts/smoke.ts —
+                    the condition resolves `server-only` to its empty module in plain Node)
+lib/types.ts         shared types + CATEGORY_SLUGS (pure, client-safe)
+lib/db.ts            typed data-access layer (Neon serverless driver, server-only)
 ```
 
 ## Status

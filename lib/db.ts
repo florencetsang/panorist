@@ -1,5 +1,5 @@
 /**
- * Typed data-access layer for the Panorist prototype.
+ * Typed data-access layer for the Panorist prototype. Server-only.
  *
  * Plain SQL over the Neon serverless driver (no ORM by design). The driver speaks
  * HTTPS — one request per query, no connection state — which is exactly what a
@@ -7,9 +7,21 @@
  *   - timestamptz columns come back as JS `Date`
  *   - jsonb columns come back pre-parsed (object / array / null)
  *   - bigint columns (reports.id) come back as `string` (int64 > JS safe integers)
+ *
+ * Types are imported from `./types.ts`, a pure module that is safe to import from
+ * client code; everything in here must stay on the server.
  */
 
+import 'server-only'; // any client-side import of this module fails the build
+
 import { neon } from '@neondatabase/serverless';
+import type {
+  PreferencesPatch,
+  PushSubscriptionJSON,
+  Report,
+  TopicContent,
+  UserWithPreferences,
+} from './types.ts';
 
 const connectionString = process.env.DATABASE_URL;
 if (!connectionString) {
@@ -19,76 +31,6 @@ if (!connectionString) {
 
 /** Query function: `sql\`SELECT ...\`` (params are safely interpolated). */
 export const sql = neon(connectionString);
-
-// ---------------------------------------------------------------------------
-// Shared types
-// ---------------------------------------------------------------------------
-
-/** The prototype's fixed category vocabulary (mirrored by a CHECK in db/schema.sql). */
-export const CATEGORY_SLUGS = [
-  'world',
-  'asia_pacific',
-  'hong_kong',
-  'economics',
-  'sport',
-  'entertainment',
-  'lifestyle',
-] as const;
-
-export type CategorySlug = (typeof CATEGORY_SLUGS)[number];
-
-export type Frequency = 'daily' | 'weekly';
-
-/** The browser PushSubscription.toJSON() payload; the web-push library consumes this shape. */
-export interface PushSubscriptionJSON {
-  endpoint: string;
-  expirationTime: number | null;
-  keys: { p256dh: string; auth: string };
-}
-
-export interface User {
-  id: string;
-  email: string;
-  timezone: string;
-  createdAt: Date;
-}
-
-export interface Preferences {
-  userId: string;
-  frequency: Frequency;
-  /** Local wall-clock hour (0–23) in the user's timezone. */
-  deliveryHour: number;
-  categories: CategorySlug[];
-  pushSubscription: PushSubscriptionJSON | null;
-  updatedAt: Date;
-}
-
-export interface TopicSource {
-  title: string;
-  url: string;
-}
-
-/** One element of a report's `content` jsonb array. */
-export interface TopicContent {
-  category: string;
-  headline: string;
-  body: string;
-  sources: TopicSource[];
-}
-
-export interface Report {
-  id: string; // bigserial → string
-  userId: string;
-  /** Currently the user's frequency ('daily' | 'weekly'); left free for future kinds. */
-  kind: string;
-  periodStart: Date;
-  periodEnd: Date;
-  content: TopicContent[];
-  createdAt: Date;
-}
-
-/** users ⋈ preferences, as returned by the two joined-row helpers below. */
-export type UserWithPreferences = User & Preferences;
 
 // ---------------------------------------------------------------------------
 // Shared SELECT fragments
@@ -189,11 +131,6 @@ export async function getReportsForUser(userId: string, limit = 20): Promise<Rep
   `;
   return rows as unknown as Report[];
 }
-
-/** Fields of preferences that may be partially updated. */
-export type PreferencesPatch = Partial<
-  Pick<Preferences, 'frequency' | 'deliveryHour' | 'categories' | 'pushSubscription'>
->;
 
 /** Partially update a user's preferences (only the provided fields are written). */
 export async function updatePreferences(userId: string, patch: PreferencesPatch): Promise<void> {

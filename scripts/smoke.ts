@@ -1,6 +1,8 @@
 // Exercises every lib/db.ts helper against the live database (uses the seed user).
-// Run: node --env-file=.env.local scripts/smoke.ts
-// (Node >= 23 runs .ts files natively via type stripping.)
+// Run: node --env-file=.env.local --conditions react-server scripts/smoke.ts
+// (Node >= 23 runs .ts files natively via type stripping. --conditions react-server
+// resolves the `server-only` marker in lib/db.ts to its empty module instead of
+// the throwing one — the same condition Next.js sets for server bundles.)
 
 import assert from 'node:assert';
 import {
@@ -11,9 +13,8 @@ import {
   getReportsForUser,
   updatePreferences,
   savePushSubscription,
-  type CategorySlug,
-  type TopicContent,
 } from '../lib/db.ts';
+import { type CategorySlug, type TopicContent } from '../lib/types.ts';
 
 const SEED_CATEGORIES: CategorySlug[] = ['hong_kong', 'world', 'economics'];
 
