@@ -14,7 +14,7 @@ import type { Preferences, TopicContent, User } from '../lib/types.ts';
 // fetch entirely, so placeholders are enough to satisfy llmEnv()'s fail-fast
 // check.
 const liveConfigured = Boolean(
-  process.env.LLM_BASE_URL && process.env.LLM_API_KEY && process.env.LLM_MODEL,
+    process.env.LLM_BASE_URL && process.env.LLM_API_KEY && process.env.LLM_MODEL,
 );
 if (!liveConfigured) {
   process.env.LLM_BASE_URL ??= 'https://offline-test.example/v1';
@@ -26,18 +26,18 @@ const DAY_MS = 86_400_000;
 const RANGE = { start: new Date(Date.now() - DAY_MS), end: new Date() };
 const realFetch = globalThis.fetch;
 
-/** A Gemini-native success response carrying the given assistant text. */
+/** An OpenAI-compatible success response carrying the given assistant text. */
 function assistantResponse(content: string): Response {
-  return new Response(
-    JSON.stringify({ candidates: [{ content: { parts: [{ text: content }] }, finishReason: 'STOP' }] }),
-    { status: 200, headers: { 'Content-Type': 'application/json' } },
-  );
+  return new Response(JSON.stringify({ choices: [{ message: { role: 'assistant', content } }] }), {
+    status: 200,
+    headers: { 'Content-Type': 'application/json' },
+  });
 }
 
 /** Install a fetch stub; the handler inspects the request body (the prompt). */
 function stubFetch(handler: (body: string) => Response): void {
   globalThis.fetch = (async (_input: unknown, init?: RequestInit) =>
-    handler(String(init?.body ?? ''))) as typeof fetch;
+      handler(String(init?.body ?? ''))) as typeof fetch;
 }
 
 // Canned model output: deliberately fenced, wrapped in chatty prose, with a
@@ -79,7 +79,7 @@ async function main() {
 
   // 2. Happy path through the full pipeline (request built, sent, parsed, validated).
   stubFetch(() =>
-    assistantResponse('Sure! Here you go:\n```json\n' + JSON.stringify(RAW_TOPICS) + '\n```\nAnything else?'),
+      assistantResponse('Sure! Here you go:\n```json\n' + JSON.stringify(RAW_TOPICS) + '\n```\nAnything else?'),
   );
   assert.deepEqual(await generateCategoryTopics('hong_kong', RANGE), EXPECTED_TOPICS);
 
@@ -91,14 +91,14 @@ async function main() {
   stubFetch(() => assistantResponse(JSON.stringify([{ headline: 'h', body: 'b', sources: [] }])));
   await assert.rejects(generateCategoryTopics('world', RANGE), /sources/);
   stubFetch(() =>
-    assistantResponse(JSON.stringify([{ headline: 'h', body: 'b', sources: [{ title: 't', url: 'example.com' }] }])),
+      assistantResponse(JSON.stringify([{ headline: 'h', body: 'b', sources: [{ title: 't', url: 'example.com' }] }])),
   );
   await assert.rejects(generateCategoryTopics('world', RANGE), /url/);
 
   // 5. Transient failure: first attempt 503s, second succeeds (1 backoff sleep).
   let calls = 0;
   stubFetch(() =>
-    ++calls === 1 ? new Response('upstream overloaded', { status: 503 }) : assistantResponse(JSON.stringify(RAW_TOPICS)),
+      ++calls === 1 ? new Response('upstream overloaded', { status: 503 }) : assistantResponse(JSON.stringify(RAW_TOPICS)),
   );
   await generateCategoryTopics('sport', RANGE);
   assert.equal(calls, 2);
@@ -115,9 +115,9 @@ async function main() {
   // 7. generateReport: one category 400s — it is logged (see stderr) and
   //    skipped while the other category still produces its topics.
   stubFetch((body) =>
-    body.includes('sports news') // sport's prompt label — request-body routing
-      ? new Response('bad request', { status: 400 })
-      : assistantResponse(JSON.stringify(RAW_TOPICS)),
+      body.includes('sports news') // sport's prompt label — request-body routing
+          ? new Response('bad request', { status: 400 })
+          : assistantResponse(JSON.stringify(RAW_TOPICS)),
   );
   const user: User = {
     id: '00000000-0000-0000-0000-000000000000',
