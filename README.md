@@ -65,16 +65,17 @@ users are due on Mondays, local time.
 ## LLM
 
 `lib/llm.ts` turns a category + date range into `TopicContent[]` via a
-web-search-enabled chat model. The provider seam is ONE function
-(`postChatCompletion`): a standard OpenAI-compatible POST to
-`{LLM_BASE_URL}/chat/completions`. Web search is a property of the model
-(chosen with `LLM_MODEL`), because the chat-completions spec has no standard
-search switch — provider-specific knobs (OpenRouter `plugins`, xAI
-`search_parameters`, …) are documented inline at the seam. Output parsing is
-defensive (code fences stripped, shape validated, malformed output throws),
-each network call has a 60s timeout with at most 2 retries, and
-`generateReport` runs categories with concurrency 3, skipping (with a log
-line) any category whose call fails.
+web-search-grounded Gemini chat model. The provider seam is ONE function
+(`postChatCompletion`): a POST to Google's native
+`{LLM_BASE_URL}/models/{LLM_MODEL}:generateContent` with the `google_search`
+tool. (Google's OpenAI-compatible `/chat/completions` cannot enable search
+grounding — prompted to "search the web" without the tool, Gemini 3 emits a
+malformed pseudo-search call and returns an empty `MALFORMED_FUNCTION_CALL`
+response or an HTTP 400.) Output parsing is defensive (code fences stripped,
+shape validated, malformed output throws), each network call has a 90s
+timeout with at most 2 retries, and `generateReport` runs categories with
+concurrency 3, skipping (with a log line) any category whose call fails.
+Swapping providers means rewriting that one function plus the LLM_* env vars.
 
 ## Project layout
 

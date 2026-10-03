@@ -26,12 +26,12 @@ const DAY_MS = 86_400_000;
 const RANGE = { start: new Date(Date.now() - DAY_MS), end: new Date() };
 const realFetch = globalThis.fetch;
 
-/** An OpenAI-compatible success response carrying the given assistant text. */
+/** A Gemini-native success response carrying the given assistant text. */
 function assistantResponse(content: string): Response {
-  return new Response(JSON.stringify({ choices: [{ message: { role: 'assistant', content } }] }), {
-    status: 200,
-    headers: { 'Content-Type': 'application/json' },
-  });
+  return new Response(
+      JSON.stringify({ candidates: [{ content: { parts: [{ text: content }] }, finishReason: 'STOP' }] }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } },
+  );
 }
 
 /** Install a fetch stub; the handler inspects the request body (the prompt). */

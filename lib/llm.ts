@@ -29,8 +29,8 @@ import {
 
 /** Categories requested in parallel per report; kept low to avoid 429s. */
 const MAX_CONCURRENCY = 3;
-/** Per-attempt timeout — web search plus long summaries can take tens of seconds. */
-const REQUEST_TIMEOUT_MS = 60_000;
+/** Per-attempt timeout — search-grounded multi-topic summaries can take a minute. */
+const REQUEST_TIMEOUT_MS = 90_000;
 /** Retries AFTER the first attempt (up to 3 attempts total per call). */
 const MAX_RETRIES = 2;
 /** Backoff base: 1s after the 1st attempt, 4s after the 2nd. */
@@ -147,28 +147,49 @@ function buildMessages(category: CategorySlug, { start, end }: DateRange): ChatM
 /**
  * POST one chat completion and return the assistant's text.
  *
- * Transport: a standard OpenAI-compatible request to
- * `{LLM_BASE_URL}/chat/completions`. Web search is a property of the MODEL
- * here, because the chat-completions spec has no standard search switch —
- * every provider gates it differently, and unknown extra fields risk 400s
- * from strict endpoints:
- *   • Perplexity sonar / OpenAI *-search-preview / Gemini grounded models:
- *     search is built in — pick the model via LLM_MODEL, add nothing (default).
- *   • OpenRouter: use an ":online" model id, or add `plugins: [{type:'web_search'}]`.
- *   • xAI: add `search_parameters: { mode: 'on' }`.
- *   • OpenAI Responses API: switch the URL to /responses and pass `tools`.
- * The prompt (buildMessages) reinforces this by instructing the model to use
- * its search capability; strict-JSON output is likewise enforced by the
- * prompt + defensive parsing rather than `response_format`, which several
- * search models reject.
+ * Transport: Google's NATIVE generateContent API — POST
+ * `{LLM_BASE_URL}/models/{LLM_MODEL}:generateContent` — with the
+ * `google_search` tool, so the grounding the prompt demands is real.
+ *
+ * Why native and not the OpenAI-compatible `/chat/completions` served on the
+ * same host: the compat layer has NO way to enable search grounding (every
+ * spelling — `tools:[{type:'google_search'}]`, `web_search_options`, … — is
+ * rejected with a 400), and a model told to "search the web" without a
+ * search tool fights back: Gemini 3 emits a pseudo-search function call that
+ * the endpoint either drops (empty response, finish_reason
+ * "MALFORMED_FUNCTION_CALL") or rejects (HTTP 400). Declaring the tool makes
+ * the search genuine and cited.
+ *
+ * Swapping providers means rewriting THIS function plus the LLM_* env vars
+ * (see .env.example): Perplexity sonar / OpenAI *-search-preview are plain
+ * OpenAI-compatible POSTs with search built into the model; OpenRouter offers
+ * ":online" model ids; xAI takes `search_parameters: { mode: 'on' }` — all can
+ * consume the same ChatMessage[] the prompt layer produces. Strict-JSON output
+ * stays enforced by prompt + defensive parsing rather than `response_format`,
+ * which several search models reject.
  */
 async function postChatCompletion(messages: ChatMessage[]): Promise<string> {
   const { baseUrl, apiKey, model } = llmEnv();
-  const raw = await fetchWithRetry(`${baseUrl.replace(/\/+$/, '')}/chat/completions`, {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ model, messages }), // deliberately only standard fields
-  });
+  const system = messages
+    .filter((message) => message.role === 'system')
+    .map((message) => message.content)
+    .join(' ');
+  const contents = messages
+    .filter((message) => message.role === 'user')
+    .map((message) => ({ role: 'user', parts: [{ text: message.content }] }));
+  const body: Record<string, unknown> = {
+    contents,
+    tools: [{ google_search: {} }], // snake_case: the REST field name
+  };
+  if (system) body.systemInstruction = { parts: [{ text: system }] };
+  const raw = await fetchWithRetry(
+    `${baseUrl.replace(/\/+$/, '')}/models/${encodeURIComponent(model)}:generateContent`,
+    {
+      method: 'POST',
+      headers: { 'x-goog-api-key': apiKey, 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    },
+  );
   return extractAssistantText(raw);
 }
 
@@ -188,7 +209,13 @@ function llmEnv(): { baseUrl: string; apiKey: string; model: string } {
   };
 }
 
-/** Unwraps the assistant's text from an OpenAI-compatible response body. */
+/**
+ * Unwraps the assistant's text from a generateContent response: the first
+ * candidate's text parts, joined. Search grounding returns ordinary text parts
+ * (citations ride along in a separate groundingMetadata field we ignore — the
+ * model is told to embed sources in the JSON itself). Thought parts are skipped
+ * defensively, though they are only produced when explicitly requested.
+ */
 function extractAssistantText(rawBody: string): string {
   let parsed: unknown;
   try {
@@ -196,12 +223,24 @@ function extractAssistantText(rawBody: string): string {
   } catch {
     throw new Error(`LLM endpoint returned non-JSON: ${snippet(rawBody)}`);
   }
-  const content = (parsed as { choices?: Array<{ message?: { content?: unknown } }> }).choices?.[0]
-    ?.message?.content;
-  if (typeof content !== 'string' || content.trim() === '') {
-    throw new Error(`LLM response has no message content: ${snippet(rawBody)}`);
+  const body = parsed as {
+    candidates?: Array<{
+      finishReason?: unknown;
+      content?: { parts?: Array<{ text?: unknown; thought?: unknown }> };
+    }>;
+  };
+  const candidate = body.candidates?.[0];
+  const text = (candidate?.content?.parts ?? [])
+    .filter((part) => part.thought !== true)
+    .map((part) => (typeof part.text === 'string' ? part.text : ''))
+    .join('');
+  if (text.trim() === '') {
+    throw new Error(
+      `LLM response has no text content (finishReason=${String(candidate?.finishReason ?? '?')}): ` +
+        snippet(rawBody),
+    );
   }
-  return content;
+  return text;
 }
 
 // ---------------------------------------------------------------------------
@@ -217,7 +256,7 @@ class FatalError extends Error {}
  * fetch with up to MAX_RETRIES retries and a REQUEST_TIMEOUT_MS timeout per
  * attempt. Backoff is plain exponential with no jitter — at prototype call
  * volumes jitter buys nothing. Timeouts are NOT retried: a call that needs
- * more than 60s once will very likely time out again and just eat the cron
+ * more than the timeout once will very likely time out again and just eat the cron
  * invocation's remaining time budget.
  */
 async function fetchWithRetry(url: string, init: RequestInit): Promise<string> {
