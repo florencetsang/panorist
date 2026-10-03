@@ -62,6 +62,20 @@ their IANA timezone matches `delivery_hour` — the timezone conversion is done 
 Postgres (`AT TIME ZONE`) so DST and half-hour zones are handled for us. Weekly
 users are due on Mondays, local time.
 
+## LLM
+
+`lib/llm.ts` turns a category + date range into `TopicContent[]` via a
+web-search-enabled chat model. The provider seam is ONE function
+(`postChatCompletion`): a standard OpenAI-compatible POST to
+`{LLM_BASE_URL}/chat/completions`. Web search is a property of the model
+(chosen with `LLM_MODEL`), because the chat-completions spec has no standard
+search switch — provider-specific knobs (OpenRouter `plugins`, xAI
+`search_parameters`, …) are documented inline at the seam. Output parsing is
+defensive (code fences stripped, shape validated, malformed output throws),
+each network call has a 60s timeout with at most 2 retries, and
+`generateReport` runs categories with concurrency 3, skipping (with a log
+line) any category whose call fails.
+
 ## Project layout
 
 ```
@@ -73,9 +87,13 @@ scripts/smoke.ts    exercises every lib/db.ts helper
                     the condition resolves `server-only` to its empty module in plain Node)
 lib/types.ts         shared types + CATEGORY_SLUGS (pure, client-safe)
 lib/db.ts            typed data-access layer (Neon serverless driver, server-only)
+lib/llm.ts           LLM abstraction: generateCategoryTopics / generateReport
+                     (provider seam + web-search notes in postChatCompletion)
+scripts/llm-smoke.ts offline stubbed-fetch tests + optional live round-trip
+                     (node --env-file=.env.local --conditions react-server scripts/llm-smoke.ts)
 ```
 
 ## Status
 
-Schema, seed, and data-access layer are done. API routes, the cron job, web push,
-and the frontend are the next milestones.
+Schema, seed, data-access layer, and the LLM abstraction (`lib/llm.ts`) are done.
+API routes, the cron job, web push, and the frontend are the next milestones.

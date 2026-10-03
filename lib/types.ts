@@ -21,6 +21,12 @@ export type CategorySlug = (typeof CATEGORY_SLUGS)[number];
 
 export type Frequency = 'daily' | 'weekly';
 
+/** The window a report covers (e.g. last 24h for daily, last 7 days for weekly). */
+export interface DateRange {
+  start: Date;
+  end: Date;
+}
+
 /** The browser PushSubscription.toJSON() payload; the web-push library consumes this shape. */
 export interface PushSubscriptionJSON {
   endpoint: string;
