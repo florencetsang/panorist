@@ -51,19 +51,6 @@ export interface Preferences {
   updatedAt: Date;
 }
 
-export interface TopicSource {
-  title: string;
-  url: string;
-}
-
-/** One element of a report's `content` jsonb array. */
-export interface TopicContent {
-  category: string;
-  headline: string;
-  body: string;
-  sources: TopicSource[];
-}
-
 export interface Report {
   id: string; // bigserial → string
   userId: string;
@@ -71,7 +58,8 @@ export interface Report {
   kind: string;
   periodStart: Date;
   periodEnd: Date;
-  content: TopicContent[];
+  /** The report body: the LLM's markdown, stored verbatim. */
+  content: string;
   createdAt: Date;
 }
 

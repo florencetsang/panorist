@@ -19,7 +19,6 @@ import type {
   PreferencesPatch,
   PushSubscriptionJSON,
   Report,
-  TopicContent,
   UserWithPreferences,
 } from './types.ts';
 
@@ -103,16 +102,15 @@ export async function saveReport(
   kind: string,
   periodStart: Date | string,
   periodEnd: Date | string,
-  content: TopicContent[],
+  content: string,
 ): Promise<string> {
   // The HTTP transport JSON-encodes parameters, so pass timestamps as ISO text
-  // (Postgres infers timestamptz from the column) and jsonb as a JSON string.
+  // (Postgres infers timestamptz from the column); content is plain markdown text.
   const toIso = (d: Date | string) => (d instanceof Date ? d.toISOString() : d);
 
   const rows = await sql`
     INSERT INTO reports (user_id, kind, period_start, period_end, content)
-    VALUES (${userId}, ${kind}, ${toIso(periodStart)}, ${toIso(periodEnd)},
-            ${JSON.stringify(content)}::jsonb)
+    VALUES (${userId}, ${kind}, ${toIso(periodStart)}, ${toIso(periodEnd)}, ${content})
     RETURNING id
   `;
   return (rows[0] as { id: string }).id;

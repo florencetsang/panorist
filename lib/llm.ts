@@ -1,11 +1,15 @@
 /**
- * The LLM abstraction: discovers and summarizes news via a web-search-enabled
- * chat model.
+ * The LLM abstraction: fetches the day's news for a category via a
+ * web-search-enabled chat model.
  *
  * Provider-agnostic by design. The ONLY code that knows the wire format is
  * `postChatCompletion` — swapping providers means editing that one function
  * plus the three LLM_* env vars (see .env.example). Everything above it talks
- * in prompts and TopicContent[], everything below it is plain HTTPS plumbing.
+ * in prompts and markdown strings, everything below it is plain HTTPS plumbing.
+ *
+ * Output policy: the model's own markdown IS the report content — no JSON
+ * schema, no parsing beyond an empty-response check. The model is a better
+ * editor than our validator, so we store what it wrote.
  *
  * Scope: content only. This module never touches the database and never sends
  * notifications — the cron route orchestrates both around it.
@@ -18,8 +22,6 @@ import {
   type CategorySlug,
   type DateRange,
   type Preferences,
-  type TopicContent,
-  type TopicSource,
   type User,
 } from './types.ts';
 
@@ -41,43 +43,51 @@ const BACKOFF_BASE_MS = 1_000;
 // ---------------------------------------------------------------------------
 
 /**
- * Ask the model for the most important news in one category for a date range,
- * as 2-4 distinct topics, each with a headline, a comprehensive multi-paragraph
- * body and real sources. Throws on malformed model output — callers treat a
- * category as best-effort (see generateReport).
+ * Ask the model for today's news in one category and return its markdown
+ * verbatim. There is no output schema to enforce — the only validation is
+ * the non-emptiness check inside extractAssistantText — so callers get the
+ * model's words as-is. Throws on transport failures; callers treat a category
+ * as best-effort (see generateReport).
  */
-export async function generateCategoryTopics(
+export async function generateCategoryMarkdown(
   category: string,
   dateRange: DateRange,
-): Promise<TopicContent[]> {
+): Promise<string> {
   // The DB CHECK already guarantees valid slugs; this guards programmatic misuse.
   if (!(CATEGORY_SLUGS as readonly string[]).includes(category)) {
     throw new Error(`Unknown category "${category}" — expected one of: ${CATEGORY_SLUGS.join(', ')}`);
   }
-  const raw = await postChatCompletion(buildMessages(category as CategorySlug, dateRange));
-  return validateTopics(parseModelJson(raw), category);
+  return postChatCompletion(buildMessages(category as CategorySlug, dateRange));
 }
 
 /**
- * Build a whole report: one generateCategoryTopics call per subscribed category
- * (at most MAX_CONCURRENCY in flight), flattened in the user's preference
- * order. A category whose call fails is logged and skipped — one flaky request
- * must not kill the report. If every category fails, [] is returned and the
- * cron route decides whether an empty report is worth storing.
+ * Build a whole report as ONE markdown string: one generateCategoryMarkdown
+ * call per subscribed category (at most MAX_CONCURRENCY in flight), each
+ * contributing a "## <category label>" heading plus the model's markdown,
+ * joined by blank lines. A category whose call fails is logged and skipped —
+ * one flaky request must not kill the report. If every category fails, '' is
+ * returned and the cron route decides whether an empty report is worth
+ * storing.
+ *
+ * The heading is the ONLY wrapper we add around the model's markdown —
+ * without it a multi-category report is indistinguishable soup.
  */
 export async function generateReport(
   user: User,
   preferences: Preferences,
   dateRange: DateRange,
-): Promise<TopicContent[]> {
+): Promise<string> {
   const categories = [...new Set(preferences.categories)]; // defensive dedupe
-  const perCategory = await mapLimit(categories, MAX_CONCURRENCY, (category) =>
-    generateCategoryTopics(category, dateRange).catch((err) => {
+  const sections = await mapLimit(categories, MAX_CONCURRENCY, async (category) => {
+    try {
+      const markdown = await generateCategoryMarkdown(category, dateRange);
+      return `## ${CATEGORY_LABELS[category]}\n\n${markdown}`;
+    } catch (err) {
       console.error(`[llm] category "${category}" failed for user ${user.email} — skipping`, err);
-      return [] as TopicContent[];
-    }),
-  );
-  return perCategory.flat();
+      return null;
+    }
+  });
+  return sections.filter((section): section is string => section !== null).join('\n\n');
 }
 
 // ---------------------------------------------------------------------------
@@ -100,39 +110,21 @@ interface ChatMessage {
   content: string;
 }
 
-function buildMessages(category: CategorySlug, { start, end }: DateRange): ChatMessage[] {
-  const days = Math.max(1, Math.round((end.getTime() - start.getTime()) / 86_400_000));
-  const from = start.toISOString().slice(0, 10);
+function buildMessages(category: CategorySlug, { end }: DateRange): ChatMessage[] {
+  // "Today" is the end of the window (the cron run's reference date). The
+  // window start is implicit — the system prompt's "requested period" covers
+  // weekly ranges without spelling out dates twice.
   const to = end.toISOString().slice(0, 10);
 
   const system = [
     'You are the news editor of a personalized briefing product.',
     'You have web-search capability: you MUST search the web for the requested period and ground every statement in what you find.',
-    'You always answer with strict JSON only — no markdown fences, no commentary before or after.',
+    'Cite any sources that the reader can read as further reading.',
   ].join(' ');
 
-  const user = [
-    `Identify the most important ${CATEGORY_LABELS[category]} (category slug "${category}") a reader should know about between ${from} and ${to} — a ${days}-day window where ${to} is "today".`,
-    '',
-    'Select the 2 to 4 most important, clearly DISTINCT topics of that window. Distinct means different events or storylines — never two angles of the same story.',
-    '',
-    'For each topic provide:',
-    '- "headline": one clear declarative sentence, at most 15 words, no outlet name.',
-    '- "body": a comprehensive summary in 2-3 paragraphs separated by a blank line (\\n\\n): what happened, the key facts and figures, and why it matters. Write for a busy reader.',
-    '- "sources": 2 to 4 real articles you found via web search; "title" is the article headline, "url" its canonical URL.',
-    '',
-    'Rules: use only information you verified via web search for this window; omit anything you cannot source; every "url" must be a real http(s) URL you actually found.',
-    '',
-    'Respond with ONLY a JSON array matching exactly this schema:',
-    '[',
-    '  {',
-    '    "category": "<the slug given above>",',
-    '    "headline": "string",',
-    '    "body": "string (multi-paragraph, \\n\\n between paragraphs)",',
-    '    "sources": [{ "title": "string", "url": "string" }]',
-    '  }',
-    ']',
-  ].join('\n');
+  // Deliberately one short question: with search grounding doing the work, the
+  // long prescriptive prompt mostly produced brittle JSON, not better news.
+  const user = `What are some top ${CATEGORY_LABELS[category]} that I should be aware of today on ${to}?`;
 
   return [
     { role: 'system', content: system },
@@ -164,9 +156,9 @@ function buildMessages(category: CategorySlug, { start, end }: DateRange): ChatM
  * (see .env.example): Perplexity sonar / OpenAI *-search-preview are plain
  * OpenAI-compatible POSTs with search built into the model; OpenRouter offers
  * ":online" model ids; xAI takes `search_parameters: { mode: 'on' }` — all can
- * consume the same ChatMessage[] the prompt layer produces. Strict-JSON output
- * stays enforced by prompt + defensive parsing rather than `response_format`,
- * which several search models reject.
+ * consume the same ChatMessage[] the prompt layer produces. Free-form markdown
+ * output means `response_format` is never needed (several search models reject
+ * it anyway).
  */
 async function postChatCompletion(messages: ChatMessage[]): Promise<string> {
   const { baseUrl, apiKey, model } = llmEnv();
@@ -213,7 +205,7 @@ function llmEnv(): { baseUrl: string; apiKey: string; model: string } {
  * Unwraps the assistant's text from a generateContent response: the first
  * candidate's text parts, joined. Search grounding returns ordinary text parts
  * (citations ride along in a separate groundingMetadata field we ignore — the
- * model is told to embed sources in the JSON itself). Thought parts are skipped
+ * model is asked to cite further reading inline). Thought parts are skipped
  * defensively, though they are only produced when explicitly requested.
  */
 function extractAssistantText(rawBody: string): string {
@@ -291,66 +283,6 @@ async function fetchWithRetry(url: string, init: RequestInit): Promise<string> {
     }
   }
   throw lastError;
-}
-
-// ---------------------------------------------------------------------------
-// Output parsing & validation (defensive: models misformat JSON constantly)
-// ---------------------------------------------------------------------------
-
-/** Model text → parsed JSON: strips ``` fences, salvages an array from prose. */
-function parseModelJson(raw: string): unknown {
-  const fenced = /```(?:json)?\s*([\s\S]*?)```/i.exec(raw);
-  const candidate = (fenced ? fenced[1] : raw).trim();
-  try {
-    return JSON.parse(candidate);
-  } catch {
-    // Some models wrap the JSON in a sentence ("Here is your briefing:") or
-    // append usage notes; the report itself is the outermost [...] — salvage it.
-    const start = candidate.indexOf('[');
-    const end = candidate.lastIndexOf(']');
-    if (start !== -1 && end > start) {
-      try {
-        return JSON.parse(candidate.slice(start, end + 1));
-      } catch {
-        /* fall through to the error below */
-      }
-    }
-    throw new Error(`LLM output is not parseable JSON: ${snippet(raw)}`);
-  }
-}
-
-/**
- * Shape-validates the parsed output against TopicContent[] and throws with a
- * precise reason on the first malformed element — during a prototype, loud
- * failures beat silently storing broken reports. One soft spot: "category" is
- * overwritten with the requested slug, because we know which call produced the
- * row, so a mismatch is cosmetic rather than structural.
- */
-function validateTopics(parsed: unknown, category: string): TopicContent[] {
-  if (!Array.isArray(parsed) || parsed.length === 0) {
-    throw new Error(`Expected a non-empty JSON array of topics, got: ${snippet(JSON.stringify(parsed))}`);
-  }
-  return parsed.map((raw, i): TopicContent => {
-    const where = `topic ${i}`;
-    if (typeof raw !== 'object' || raw === null) throw new Error(`${where}: not an object`);
-    const { headline, body, sources } = raw as Record<string, unknown>;
-    if (typeof headline !== 'string' || !headline.trim()) throw new Error(`${where}: missing "headline"`);
-    if (typeof body !== 'string' || !body.trim()) throw new Error(`${where}: missing "body"`);
-    if (!Array.isArray(sources) || sources.length === 0) {
-      throw new Error(`${where}: "sources" must be a non-empty array`);
-    }
-    const cleanSources: TopicSource[] = sources.map((source, j): TopicSource => {
-      const at = `${where} source ${j}`;
-      if (typeof source !== 'object' || source === null) throw new Error(`${at}: not an object`);
-      const { title, url } = source as Record<string, unknown>;
-      if (typeof title !== 'string' || !title.trim()) throw new Error(`${at}: missing "title"`);
-      if (typeof url !== 'string' || !/^https?:\/\//.test(url.trim())) {
-        throw new Error(`${at}: "url" is not a valid http(s) URL: ${String(url)}`);
-      }
-      return { title: title.trim(), url: url.trim() };
-    });
-    return { category, headline: headline.trim(), body: body.trim(), sources: cleanSources };
-  });
 }
 
 // ---------------------------------------------------------------------------

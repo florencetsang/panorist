@@ -1,14 +1,14 @@
-// Exercises lib/llm.ts: offline with a stubbed fetch (prompt → request → parse
-// → validate, retry, per-category resilience), then — only when the LLM_* env
-// vars are set — one live round-trip per category.
+// Exercises lib/llm.ts: offline with a stubbed fetch (prompt → request →
+// response extraction, retry, per-category resilience), then — only when the
+// LLM_* env vars are set — one live round-trip.
 // Run: node --env-file=.env.local --conditions react-server scripts/llm-smoke.ts
 // (--conditions react-server resolves lib/llm.ts's `server-only` marker
 // outside Next.js, the same way scripts/smoke.ts handles lib/db.ts.)
 
 import assert from 'node:assert';
 
-import { generateCategoryTopics, generateReport } from '../lib/llm.ts';
-import type { Preferences, TopicContent, User } from '../lib/types.ts';
+import { generateCategoryMarkdown, generateReport } from '../lib/llm.ts';
+import type { Preferences, User } from '../lib/types.ts';
 
 // A real live round-trip needs real values; the offline tests below stub
 // fetch entirely, so placeholders are enough to satisfy llmEnv()'s fail-fast
@@ -40,67 +40,63 @@ function stubFetch(handler: (body: string) => Response): void {
       handler(String(init?.body ?? ''))) as typeof fetch;
 }
 
-// Canned model output: deliberately fenced, wrapped in chatty prose, with a
-// wrong "category" field and untrimmed strings — proving the defensive parser
-// and validator earn their keep.
-const RAW_TOPICS = [
-  {
-    category: 'news', // wrong on purpose — must be normalized to the requested slug
-    headline: '  Budget lands with deficit  ',
-    body: 'Para one.\n\nPara two.',
-    sources: [{ title: 'Example Post ', url: ' https://example.com/budget ' }],
-  },
-  {
-    category: 'hong_kong',
-    headline: 'Rail line extended',
-    body: 'Para one.\n\nPara two.',
-    sources: [{ title: 'Example Post', url: 'https://example.com/rail' }],
-  },
-];
+// Canned model markdown: the model's output is stored verbatim, so the
+// fixture IS the expected result — no normalization left to test.
+const HK_MARKDOWN =
+    '## Budget lands with deficit\n\nThe deficit is larger than forecast.\n\n[Example Post](https://example.com/budget)';
 
-const EXPECTED_TOPICS: TopicContent[] = [
-  {
-    category: 'hong_kong',
-    headline: 'Budget lands with deficit',
-    body: 'Para one.\n\nPara two.',
-    sources: [{ title: 'Example Post', url: 'https://example.com/budget' }],
-  },
-  {
-    category: 'hong_kong',
-    headline: 'Rail line extended',
-    body: 'Para one.\n\nPara two.',
-    sources: [{ title: 'Example Post', url: 'https://example.com/rail' }],
-  },
-];
+const user: User = {
+  id: '00000000-0000-0000-0000-000000000000',
+  email: 'test@example.com',
+  timezone: 'Asia/Hong_Kong',
+  createdAt: new Date(),
+};
+const preferences: Preferences = {
+  userId: user.id,
+  frequency: 'daily',
+  deliveryHour: 8,
+  categories: ['hong_kong', 'sport'],
+  pushSubscription: null,
+  updatedAt: new Date(),
+};
 
 async function main() {
   // 1. Unknown slug → immediate, clear error.
-  await assert.rejects(generateCategoryTopics('not_a_slug', RANGE), /Unknown category/);
+  await assert.rejects(generateCategoryMarkdown('not_a_slug', RANGE), /Unknown category/);
 
-  // 2. Happy path through the full pipeline (request built, sent, parsed, validated).
-  stubFetch(() =>
-      assistantResponse('Sure! Here you go:\n```json\n' + JSON.stringify(RAW_TOPICS) + '\n```\nAnything else?'),
+  // 2. Happy path: the model's markdown comes back VERBATIM, and the request
+  //    carries exactly the minimal prompt pair. Markdown has no schema to
+  //    validate, so we assert the request shape instead.
+  let lastBody = '';
+  stubFetch((body) => {
+    lastBody = body;
+    return assistantResponse(HK_MARKDOWN);
+  });
+  assert.equal(await generateCategoryMarkdown('hong_kong', RANGE), HK_MARKDOWN);
+  const to = RANGE.end.toISOString().slice(0, 10);
+  assert.ok(
+      lastBody.includes(`What are some top Hong Kong news that I should be aware of today on ${to}?`),
+      'user prompt must be the exact one-line question',
   );
-  assert.deepEqual(await generateCategoryTopics('hong_kong', RANGE), EXPECTED_TOPICS);
+  assert.ok(lastBody.includes('You are the news editor of a personalized briefing product.'));
+  assert.ok(lastBody.includes('you MUST search the web for the requested period'));
+  assert.ok(lastBody.includes('Cite any sources that the reader can read as further reading.'));
+  assert.ok(!lastBody.includes('JSON'), 'the old JSON-schema prompt must be gone');
 
-  // 3. Malformed output (no JSON anywhere) → throws.
-  stubFetch(() => assistantResponse('I could not search the web, sorry.'));
-  await assert.rejects(generateCategoryTopics('world', RANGE), /not parseable JSON/);
+  // 3. Blank text parts → error (never store an empty section silently).
+  stubFetch(() => assistantResponse('   '));
+  await assert.rejects(generateCategoryMarkdown('world', RANGE), /no text content/);
 
-  // 4. Shape violations → precise errors: empty sources, then a non-http url.
-  stubFetch(() => assistantResponse(JSON.stringify([{ headline: 'h', body: 'b', sources: [] }])));
-  await assert.rejects(generateCategoryTopics('world', RANGE), /sources/);
-  stubFetch(() =>
-      assistantResponse(JSON.stringify([{ headline: 'h', body: 'b', sources: [{ title: 't', url: 'example.com' }] }])),
-  );
-  await assert.rejects(generateCategoryTopics('world', RANGE), /url/);
+  // 4. Non-JSON HTTP 200 body → error.
+  stubFetch(() => new Response('<html>gateway error</html>', { status: 200 }));
+  await assert.rejects(generateCategoryMarkdown('world', RANGE), /non-JSON/);
 
   // 5. Transient failure: first attempt 503s, second succeeds (1 backoff sleep).
   let calls = 0;
   stubFetch(() =>
-      ++calls === 1 ? new Response('upstream overloaded', { status: 503 }) : assistantResponse(JSON.stringify(RAW_TOPICS)),
+      ++calls === 1 ? new Response('upstream overloaded', { status: 503 }) : assistantResponse(HK_MARKDOWN),
   );
-  await generateCategoryTopics('sport', RANGE);
+  await generateCategoryMarkdown('sport', RANGE);
   assert.equal(calls, 2);
 
   // 6. Non-retryable HTTP 400 fails after exactly one attempt.
@@ -109,41 +105,31 @@ async function main() {
     calls++;
     return new Response('bad request', { status: 400 });
   });
-  await assert.rejects(generateCategoryTopics('sport', RANGE), /HTTP 400/);
+  await assert.rejects(generateCategoryMarkdown('sport', RANGE), /HTTP 400/);
   assert.equal(calls, 1);
 
   // 7. generateReport: one category 400s — it is logged (see stderr) and
-  //    skipped while the other category still produces its topics.
+  //    skipped while the other category still contributes its section,
+  //    wrapped in the "## <category label>" heading.
   stubFetch((body) =>
-      body.includes('sports news') // sport's prompt label — request-body routing
+      body.includes('top sports news') // sport's prompt label — request-body routing
           ? new Response('bad request', { status: 400 })
-          : assistantResponse(JSON.stringify(RAW_TOPICS)),
+          : assistantResponse(HK_MARKDOWN),
   );
-  const user: User = {
-    id: '00000000-0000-0000-0000-000000000000',
-    email: 'test@example.com',
-    timezone: 'Asia/Hong_Kong',
-    createdAt: new Date(),
-  };
-  const preferences: Preferences = {
-    userId: user.id,
-    frequency: 'daily',
-    deliveryHour: 8,
-    categories: ['hong_kong', 'sport'],
-    pushSubscription: null,
-    updatedAt: new Date(),
-  };
   const report = await generateReport(user, preferences, RANGE);
-  assert.equal(report.length, 2);
-  assert.ok(report.every((topic) => topic.category === 'hong_kong'));
+  assert.ok(report.startsWith('## Hong Kong news\n\n'), 'section must open with the category heading');
+  assert.ok(report.includes(HK_MARKDOWN), 'the surviving section is the model markdown verbatim');
+  assert.ok(!report.includes('Sports news'), 'the failed category must not appear');
+
+  // 8. No subscribed categories (or all failed) → empty string, caller decides.
+  assert.equal(await generateReport(user, { ...preferences, categories: [] }, RANGE), '');
 
   globalThis.fetch = realFetch;
 
-  // 8. Live round-trip (only when the provider is configured).
+  // 9. Live round-trip (only when the provider is configured).
   if (liveConfigured) {
-    const topics = await generateCategoryTopics('hong_kong', RANGE);
-    console.log(`live: hong_kong → ${topics.length} topic(s):`);
-    for (const topic of topics) console.log(`  - ${topic.headline} (${topic.sources.length} sources)`);
+    const markdown = await generateCategoryMarkdown('hong_kong', RANGE);
+    console.log(`live: hong_kong → ${markdown.length} chars of markdown:\n\n${markdown}\n`);
   } else {
     console.log('live: LLM_* env not set — skipped');
   }

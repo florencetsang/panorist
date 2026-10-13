@@ -48,7 +48,11 @@ demand, not cost-efficiency.
 | --- | --- |
 | `users` | `id uuid pk` (gen_random_uuid), `email` (unique), `timezone` (default `Asia/Hong_Kong`), `created_at` |
 | `preferences` | `user_id uuid pk fk→users`, `frequency` (`daily`\|`weekly`), `delivery_hour` (local hour 0–23, default 8), `categories text[]`, `push_subscription jsonb`, `updated_at` |
-| `reports` | `id bigserial pk`, `user_id fk→users`, `kind`, `period_start`, `period_end`, `content jsonb` (array of topics), `created_at` |
+| `reports` | `id bigserial pk`, `user_id fk→users`, `kind`, `period_start`, `period_end`, `content text` (the LLM's markdown, stored verbatim), `created_at` |
+
+Earlier prototypes stored `content` as jsonb; migrate an existing database with
+`ALTER TABLE reports ALTER COLUMN content TYPE text USING '';` (existing rows
+are not worth converting, so they are blanked).
 
 Indexes: `reports(user_id, created_at DESC)` for the report list, and
 `preferences(frequency, delivery_hour)` for "who is due now" lookups.
@@ -64,17 +68,18 @@ users are due on Mondays, local time.
 
 ## LLM
 
-`lib/llm.ts` turns a category + date range into `TopicContent[]` via a
+`lib/llm.ts` turns a category + date range into a markdown string via a
 web-search-grounded Gemini chat model. The provider seam is ONE function
 (`postChatCompletion`): a POST to Google's native
 `{LLM_BASE_URL}/models/{LLM_MODEL}:generateContent` with the `google_search`
 tool. (Google's OpenAI-compatible `/chat/completions` cannot enable search
 grounding — prompted to "search the web" without the tool, Gemini 3 emits a
 malformed pseudo-search call and returns an empty `MALFORMED_FUNCTION_CALL`
-response or an HTTP 400.) Output parsing is defensive (code fences stripped,
-shape validated, malformed output throws), each network call has a 90s
-timeout with at most 2 retries, and `generateReport` runs categories with
-concurrency 3, skipping (with a log line) any category whose call fails.
+response or an HTTP 400.) The model's own markdown IS the report content —
+no JSON schema, only an empty-response check — and each network call has a
+90s timeout with at most 2 retries. `generateReport` runs categories with
+concurrency 3, wraps each in a `## category` heading, and skips (with a log
+line) any category whose call fails.
 Swapping providers means rewriting that one function plus the LLM_* env vars.
 
 ## Project layout
@@ -88,7 +93,7 @@ scripts/smoke.ts    exercises every lib/db.ts helper
                     the condition resolves `server-only` to its empty module in plain Node)
 lib/types.ts         shared types + CATEGORY_SLUGS (pure, client-safe)
 lib/db.ts            typed data-access layer (Neon serverless driver, server-only)
-lib/llm.ts           LLM abstraction: generateCategoryTopics / generateReport
+lib/llm.ts           LLM abstraction: generateCategoryMarkdown / generateReport
                      (provider seam + web-search notes in postChatCompletion)
 scripts/llm-smoke.ts offline stubbed-fetch tests + optional live round-trip
                      (node --env-file=.env.local --conditions react-server scripts/llm-smoke.ts)

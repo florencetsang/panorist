@@ -33,8 +33,8 @@ CREATE TABLE IF NOT EXISTS reports (
   kind         text NOT NULL,
   period_start timestamptz NOT NULL,
   period_end   timestamptz NOT NULL,
-  -- Array of topics: [{category, headline, body, sources:[{title,url}]}]
-  content      jsonb NOT NULL,
+  -- The report body: the LLM's markdown, stored verbatim (no JSON envelope).
+  content      text NOT NULL,
   created_at   timestamptz NOT NULL DEFAULT now()
 );
 
