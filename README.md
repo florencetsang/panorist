@@ -92,12 +92,18 @@ Swapping providers means rewriting that one function plus the LLM_* env vars.
 
 ## Scheduling (Vercel Cron)
 
-`vercel.json` registers a single cron: `{ "crons": [{ "path": "/api/cron", "schedule": "0 * * * *" }] }`
-— every hour, on the hour. That one hourly tick is all we need: each user
-picks a **local** `delivery_hour` in their own IANA timezone, so the cron
-route asks the database "whose local hour is it right now?" and Postgres does
-the `AT TIME ZONE` conversion (DST and half-hour zones included). One
-schedule therefore covers every timezone — no per-timezone crons.
+`vercel.json` registers a single cron: `{ "crons": [{ "path": "/api/cron", "schedule": "0 0 * * *" }] }`
+— daily at 00:00 UTC. That is exactly **8am Asia/Hong_Kong**, which is where
+all current users sit (daily reports, `delivery_hour` = 8, timezone default
+`Asia/Hong_Kong`), so one daily cron covers the whole user base — and a
+daily cadence is what the Hobby plan allows (it caps cron invocations at once
+per day). The route still matches users by **local** hour: it asks the
+database "whose local hour is it right now?" and Postgres does the
+`AT TIME ZONE` conversion (DST and half-hour zones included). So when a
+multi-timezone user base eventually needs hourly scans, only the schedule
+in `vercel.json` changes — the code doesn't. (Hourly `0 * * * *` requires
+the Pro plan; JSON forbids comments, so this rationale also lives in the
+route's header comment.)
 
 The route is guarded: Vercel Cron sends `Authorization: Bearer <CRON_SECRET>`
 automatically, and anything else gets a 401. For each due user it POSTs to
@@ -110,15 +116,11 @@ concurrency and per-user error isolation, then returns
 1. Generate a secret, e.g. `openssl rand -base64 32`.
 2. In the Vercel dashboard: **Project → Settings → Environment Variables →
    Add** — name `CRON_SECRET`, value the secret, environments Production (and
-   Preview if you want to test there).
-3. **Redeploy** — cron invocations use the values from the deploy they were
-   scheduled on, so an added variable alone isn't picked up until the next
-   deploy. (With the Vercel CLI: `vercel env add CRON_SECRET production`
-   then `vercel deploy --prod`.)
-
-Note: on the **Hobby** plan Vercel restricts cron invocations to at most once
-per day; the hourly schedule above takes effect on **Pro**. Local testing
-(below) is unaffected by that limit.
+   Preview if you want to test there). (Or `vercel env add CRON_SECRET
+   production`.)
+3. **Redeploy** — cron invocations use the env values from the deployment
+   they were scheduled on, so an added variable alone isn't picked up until
+   the next deploy (`vercel deploy --prod`).
 
 ### Testing the cron locally
 
@@ -155,11 +157,11 @@ app/api/push/subscribe/route.ts  POST {userId, subscription} — store web-push 
 app/api/generate/route.ts         POST {userId, kind} — the report worker: guarded by
                      `x-cron-secret` === CRON_SECRET, runs the LLM (with the markdown
                      cache), saves the report, sends a push, returns {reportId}
-app/api/cron/route.ts             GET — hourly scheduler entry point (Vercel Cron sends
+app/api/cron/route.ts             GET — scheduler entry point (Vercel Cron sends
                      `Authorization: Bearer ${CRON_SECRET}`); finds due users via
                      getUsersDueForReport and fans out to /api/generate with bounded
                      concurrency, returning {processed, succeeded, failed}
-vercel.json          registers the hourly cron (0 * * * *) hitting /api/cron
+vercel.json          registers the daily cron (0 0 * * * = 8am HKT) hitting /api/cron
 scripts/llm-smoke.ts offline stubbed-fetch tests + optional live round-trip
                      (node --env-file=.env.local --conditions react-server scripts/llm-smoke.ts)
 ```
@@ -168,5 +170,5 @@ scripts/llm-smoke.ts offline stubbed-fetch tests + optional live round-trip
 
 Schema, seed, data-access layer, the LLM abstraction (`lib/llm.ts`), the web-push
 helper (`lib/push.ts`), the API routes (`app/api/*`), and scheduled report
-generation (`app/api/cron/route.ts` + the hourly cron in `vercel.json`) are
-done. The frontend is the next milestone.
+generation (`app/api/cron/route.ts` + the daily Vercel Cron in `vercel.json`)
+are done. The frontend is the next milestone.

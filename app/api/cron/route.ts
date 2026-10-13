@@ -1,19 +1,25 @@
 /**
- * GET /api/cron — the hourly scheduler entry point (hit by Vercel Cron).
+ * GET /api/cron — the scheduler entry point, hit by Vercel Cron (see
+ * vercel.json).
  *
- * Why ONE hourly schedule ("0 * * * *") is enough: users pick a LOCAL
- * delivery_hour in their own IANA timezone, so instead of one cron per
- * timezone we tick every hour in UTC and ask the database whose local hour
- * it is right now (Postgres does the AT TIME ZONE math — DST and half-hour
- * zones included). Any set of timezones is covered by a single schedule.
+ * Schedule rationale: every user is currently daily @ 8am Asia/Hong_Kong,
+ * which is exactly 00:00 UTC — so ONE daily cron at "0 0 * * *" covers the
+ * whole user base and stays within the Hobby plan's once-a-day cron cap.
+ * The route still derives the due hour from the current UTC time and asks
+ * the database whose LOCAL hour it is (Postgres does the AT TIME ZONE math,
+ * DST and half-hour zones included), so when a future multi-timezone user
+ * base needs hourly scans, only the schedule changes — the code doesn't.
+ * (Hourly requires Pro, or an external free scheduler curling this route
+ * with the same Bearer header; see README "Scheduling".)
  *
  * For each due user we POST to /api/generate (the per-user worker that runs
  * the LLM, saves the report and pushes). We call it over HTTP rather than
  * importing the handler so the worker's own maxDuration/timeout budget and
  * logs stay isolated per user.
  *
- * Auth: Vercel Cron is configured to send `Authorization: Bearer ${CRON_SECRET}`
- * automatically; anything else is rejected with 401.
+ * Auth: Vercel Cron sends `Authorization: Bearer ${CRON_SECRET}`
+ * automatically (when the env var is set on the deployment); anything else
+ * is rejected with 401.
  */
 
 import { timingSafeEqual } from 'node:crypto';
