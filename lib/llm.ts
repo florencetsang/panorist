@@ -125,7 +125,7 @@ export async function generateReport(
 
 /** Prose label per category slug (slugs alone read poorly in a prompt). */
 const CATEGORY_LABELS: Record<CategorySlug, string> = {
-  world: 'world news',
+  world: 'news in the world',
   asia_pacific: 'Asia-Pacific news',
   hong_kong: 'Hong Kong news',
   economics: 'economics and business news',
