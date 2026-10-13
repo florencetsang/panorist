@@ -48,8 +48,8 @@ demand, not cost-efficiency.
 | --- | --- |
 | `users` | `id uuid pk` (gen_random_uuid), `email` (unique), `timezone` (default `Asia/Hong_Kong`), `created_at` |
 | `preferences` | `user_id uuid pk fk→users`, `frequency` (`daily`\|`weekly`), `delivery_hour` (local hour 0–23, default 8), `categories text[]`, `push_subscription jsonb`, `updated_at` |
-| `reports` | `id bigserial pk`, `user_id fk→users`, `kind`, `frequency` (`daily`\|`weekly`), `period_start`, `period_end`, `content jsonb` (array of cache pointers `{category, frequency, from, to}`), `created_at` |
-| `markdown_cache` | `(category, frequency, from_date, to_date)` pk, `markdown text`, `created_at` — one LLM markdown per exact prompt inputs; users sharing category+window+frequency read the same row instead of each paying for an LLM call |
+| `reports` | `id bigserial pk`, `user_id fk→users`, `kind`, `frequency` (`daily`\|`weekly`), `period_start`, `period_end`, `content jsonb` (array of cache pointers `{category, frequency, to}`), `created_at` |
+| `markdown_cache` | `(category, frequency, to_date)` pk, `markdown text`, `created_at` — one LLM markdown per (category, frequency, window end); frequency implies the window length, so a from date would be redundant. Users sharing category+window+frequency read the same row instead of each paying for an LLM call |
 
 The earliest prototype stored topics as `{category, headline, body, sources}`;
 rows in that legacy shape are best wiped from an existing database:

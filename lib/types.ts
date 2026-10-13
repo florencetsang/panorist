@@ -53,15 +53,15 @@ export interface Preferences {
 }
 
 /**
- * The exact inputs of one LLM call: the prompt is a pure function of these
- * four fields (see buildMessages in lib/llm.ts), so identical keys can share
- * one stored markdown — that is the whole cache. `from`/`to` are ISO dates
- * (YYYY-MM-DD), exactly as they appear in the prompt.
+ * The cache identity of one LLM call. `to` is the ISO date (YYYY-MM-DD) the
+ * window ends on ("today"), and `frequency` pins the window length — daily =
+ * that one day, weekly = the 7 days ending on `to` — so `from` is implied
+ * and kept out of the key. Callers must derive weekly ranges as to − 7 days,
+ * or cache rows get shared across slightly different windows.
  */
 export interface MarkdownCacheKey {
   category: string;
   frequency: Frequency;
-  from: string;
   to: string;
 }
 

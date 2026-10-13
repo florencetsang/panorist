@@ -9,7 +9,7 @@
  *
  * Output policy: the model's own markdown IS the report body — no JSON schema
  * is enforced on the model and there is no parsing beyond an empty-response
- * check. Each category's markdown is keyed by its exact prompt inputs
+ * check. Each category's markdown is keyed by (category, frequency, to)
  * (MarkdownCacheKey) so identical requests share one cached LLM call.
  *
  * Scope: content only. This module never touches the database and never sends
@@ -70,8 +70,8 @@ export async function generateCategoryMarkdown(
 
 /**
  * Build a whole report, reusing cached markdown wherever possible. Per
- * subscribed category (at most MAX_CONCURRENCY in flight), the exact prompt
- * inputs form a MarkdownCacheKey: a cache hit skips the LLM entirely —
+ * subscribed category (at most MAX_CONCURRENCY in flight), (category,
+ * frequency, to) form a MarkdownCacheKey: a cache hit skips the LLM entirely —
  * users sharing a category, window and frequency read one stored markdown.
  * On a miss the model is called and the result is cached. The returned
  * content is the list of surviving keys (pointers the frontend resolves via
@@ -93,13 +93,12 @@ export async function generateReport(
   const categories = [...new Set(preferences.categories)]; // defensive dedupe
   const sections = await mapLimit(categories, MAX_CONCURRENCY, async (category) => {
     // Explicit key type: the literal infers category: CategorySlug, which
-    // then fights the filter's type predicate below. The dates are the ISO
-    // date parts, exactly as they appear in the prompt — identical keys mean
-    // identical prompts, which is what makes the cache sound.
+    // then fights the filter's type predicate below. `to` is the ISO date of
+    // the window's end; frequency implies the window length, so `from` is not
+    // part of the key (see MarkdownCacheKey).
     const key: MarkdownCacheKey = {
       category,
       frequency: preferences.frequency,
-      from: dateRange.start.toISOString().slice(0, 10),
       to: dateRange.end.toISOString().slice(0, 10),
     };
     try {

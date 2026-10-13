@@ -57,7 +57,6 @@ async function main() {
     {
       category: 'hong_kong',
       frequency: 'daily',
-      from: periodStart.toISOString().slice(0, 10),
       to: periodEnd.toISOString().slice(0, 10),
     },
   ];

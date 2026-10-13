@@ -134,7 +134,7 @@ export async function getCachedMarkdown(key: MarkdownCacheKey): Promise<string |
   const rows = await sql`
     SELECT markdown FROM markdown_cache
     WHERE category = ${key.category} AND frequency = ${key.frequency}
-      AND from_date = ${key.from} AND to_date = ${key.to}
+      AND to_date = ${key.to}
     LIMIT 1
   `;
   return (rows[0] as { markdown: string } | undefined)?.markdown ?? null;
@@ -148,9 +148,9 @@ export async function getCachedMarkdown(key: MarkdownCacheKey): Promise<string |
  */
 export async function saveCachedMarkdown(key: MarkdownCacheKey, markdown: string): Promise<void> {
   await sql`
-    INSERT INTO markdown_cache (category, frequency, from_date, to_date, markdown)
-    VALUES (${key.category}, ${key.frequency}, ${key.from}, ${key.to}, ${markdown})
-    ON CONFLICT (category, frequency, from_date, to_date) DO NOTHING
+    INSERT INTO markdown_cache (category, frequency, to_date, markdown)
+    VALUES (${key.category}, ${key.frequency}, ${key.to}, ${markdown})
+    ON CONFLICT (category, frequency, to_date) DO NOTHING
   `;
 }
 

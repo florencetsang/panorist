@@ -148,7 +148,6 @@ async function main() {
   const hkKey = {
     category: 'hong_kong',
     frequency: 'daily' as const,
-    from: RANGE.start.toISOString().slice(0, 10),
     to: RANGE.end.toISOString().slice(0, 10),
   };
   assert.deepEqual(report.content, [hkKey]);
