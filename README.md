@@ -103,11 +103,22 @@ lib/types.ts         shared types + CATEGORY_SLUGS (pure, client-safe)
 lib/db.ts            typed data-access layer (Neon serverless driver, server-only)
 lib/llm.ts           LLM abstraction: generateCategoryMarkdown / generateReport
                      (provider seam + web-search notes in postChatCompletion)
+lib/push.ts          web-push helper: sendPush(subscription, payload), VAPID-signed
+app/api/_lib/validate.ts  request-shape helpers shared by the routes
+                     (uuid / JSON body / push-subscription checks, jsonError)
+app/api/reports/route.ts          GET ?userId — recent reports, newest first
+app/api/preferences/route.ts      GET ?userId · PATCH {userId, patch} — read/update prefs
+app/api/push/subscribe/route.ts  POST {userId, subscription} — store web-push sub (204)
+app/api/generate/route.ts         POST {userId, kind} — the report worker: guarded by
+                     `x-cron-secret` === CRON_SECRET, runs the LLM (with the markdown
+                     cache), saves the report, sends a push, returns {reportId}
 scripts/llm-smoke.ts offline stubbed-fetch tests + optional live round-trip
                      (node --env-file=.env.local --conditions react-server scripts/llm-smoke.ts)
 ```
 
 ## Status
 
-Schema, seed, data-access layer, and the LLM abstraction (`lib/llm.ts`) are done.
-API routes, the cron job, web push, and the frontend are the next milestones.
+Schema, seed, data-access layer, the LLM abstraction (`lib/llm.ts`), the web-push
+helper (`lib/push.ts`), and the API routes (`app/api/*`) are done. The cron route
+(which fans out to `/api/generate` per due user) and the frontend are the next
+milestones.
