@@ -62,41 +62,50 @@ const preferences: Preferences = {
 
 async function main() {
   // 1. Unknown slug → immediate, clear error.
-  await assert.rejects(generateCategoryMarkdown('not_a_slug', RANGE), /Unknown category/);
+  await assert.rejects(generateCategoryMarkdown('not_a_slug', RANGE, 'daily'), /Unknown category/);
 
   // 2. Happy path: the model's markdown comes back VERBATIM, and the request
   //    carries exactly the minimal prompt pair. Markdown has no schema to
-  //    validate, so we assert the request shape instead.
+  //    validate, so we assert the request shape instead — for BOTH frequencies.
   let lastBody = '';
   stubFetch((body) => {
     lastBody = body;
     return assistantResponse(HK_MARKDOWN);
   });
-  assert.equal(await generateCategoryMarkdown('hong_kong', RANGE), HK_MARKDOWN);
+  assert.equal(await generateCategoryMarkdown('hong_kong', RANGE, 'daily'), HK_MARKDOWN);
+  const from = RANGE.start.toISOString().slice(0, 10);
   const to = RANGE.end.toISOString().slice(0, 10);
   assert.ok(
       lastBody.includes(`What are some top Hong Kong news that I should be aware of today on ${to}?`),
-      'user prompt must be the exact one-line question',
+      'daily user prompt must be the exact one-line question',
   );
   assert.ok(lastBody.includes('You are the news editor of a personalized briefing product.'));
   assert.ok(lastBody.includes('you MUST search the web for the requested period'));
   assert.ok(lastBody.includes('Cite any sources that the reader can read as further reading.'));
   assert.ok(!lastBody.includes('JSON'), 'the old JSON-schema prompt must be gone');
 
+  // 2b. Weekly frequency switches the question to the explicit week window.
+  await generateCategoryMarkdown('hong_kong', RANGE, 'weekly');
+  assert.ok(
+      lastBody.includes(`What are some top Hong Kong news that I should be aware of this week - from ${from} to ${to}?`),
+      'weekly user prompt must name the week window',
+  );
+  assert.ok(!lastBody.includes('today on'), 'weekly prompt must not say "today"');
+
   // 3. Blank text parts → error (never store an empty section silently).
   stubFetch(() => assistantResponse('   '));
-  await assert.rejects(generateCategoryMarkdown('world', RANGE), /no text content/);
+  await assert.rejects(generateCategoryMarkdown('world', RANGE, 'daily'), /no text content/);
 
   // 4. Non-JSON HTTP 200 body → error.
   stubFetch(() => new Response('<html>gateway error</html>', { status: 200 }));
-  await assert.rejects(generateCategoryMarkdown('world', RANGE), /non-JSON/);
+  await assert.rejects(generateCategoryMarkdown('world', RANGE, 'daily'), /non-JSON/);
 
   // 5. Transient failure: first attempt 503s, second succeeds (1 backoff sleep).
   let calls = 0;
   stubFetch(() =>
       ++calls === 1 ? new Response('upstream overloaded', { status: 503 }) : assistantResponse(HK_MARKDOWN),
   );
-  await generateCategoryMarkdown('sport', RANGE);
+  await generateCategoryMarkdown('sport', RANGE, 'daily');
   assert.equal(calls, 2);
 
   // 6. Non-retryable HTTP 400 fails after exactly one attempt.
@@ -105,7 +114,7 @@ async function main() {
     calls++;
     return new Response('bad request', { status: 400 });
   });
-  await assert.rejects(generateCategoryMarkdown('sport', RANGE), /HTTP 400/);
+  await assert.rejects(generateCategoryMarkdown('sport', RANGE, 'daily'), /HTTP 400/);
   assert.equal(calls, 1);
 
   // 7. generateReport: one category 400s — it is logged (see stderr) and

@@ -21,6 +21,7 @@ import {
   CATEGORY_SLUGS,
   type CategorySlug,
   type DateRange,
+  type Frequency,
   type Preferences,
   type TopicContent,
   type User,
@@ -44,21 +45,23 @@ const BACKOFF_BASE_MS = 1_000;
 // ---------------------------------------------------------------------------
 
 /**
- * Ask the model for today's news in one category and return its markdown
- * verbatim. There is no output schema to enforce — the only validation is
- * the non-emptiness check inside extractAssistantText — so callers get the
- * model's words as-is. Throws on transport failures; callers treat a category
- * as best-effort (see generateReport).
+ * Ask the model for the news in one category — "today" for daily frequency,
+ * the explicit week window for weekly — and return its markdown verbatim.
+ * There is no output schema to enforce — the only validation is the
+ * non-emptiness check inside extractAssistantText — so callers get the
+ * model's words as-is. Throws on transport failures; callers treat a
+ * category as best-effort (see generateReport).
  */
 export async function generateCategoryMarkdown(
   category: string,
   dateRange: DateRange,
+  frequency: Frequency,
 ): Promise<string> {
   // The DB CHECK already guarantees valid slugs; this guards programmatic misuse.
   if (!(CATEGORY_SLUGS as readonly string[]).includes(category)) {
     throw new Error(`Unknown category "${category}" — expected one of: ${CATEGORY_SLUGS.join(', ')}`);
   }
-  return postChatCompletion(buildMessages(category as CategorySlug, dateRange));
+  return postChatCompletion(buildMessages(category as CategorySlug, dateRange, frequency));
 }
 
 /**
@@ -79,7 +82,10 @@ export async function generateReport(
     try {
       // Explicit TopicContent: the literal infers category: CategorySlug,
       // which then fights the filter's type predicate below.
-      const topic: TopicContent = { category, markdown: await generateCategoryMarkdown(category, dateRange) };
+      const topic: TopicContent = {
+        category,
+        markdown: await generateCategoryMarkdown(category, dateRange, preferences.frequency),
+      };
       return topic;
     } catch (err) {
       console.error(`[llm] category "${category}" failed for user ${user.email} — skipping`, err);
@@ -110,11 +116,15 @@ interface ChatMessage {
   content: string;
 }
 
-function buildMessages(category: CategorySlug, { end }: DateRange): ChatMessage[] {
-  // "Today" is the end of the window (the cron run's reference date). The
-  // window start is implicit — the system prompt's "requested period" covers
-  // weekly ranges without spelling out dates twice.
+function buildMessages(category: CategorySlug, { start, end }: DateRange, frequency: Frequency): ChatMessage[] {
+  // "Today" is the end of the window (the cron run's reference date); the
+  // weekly question instead names the whole window — otherwise "today"
+  // would quietly narrow a 7-day digest to the last 24 hours.
+  const from = start.toISOString().slice(0, 10);
   const to = end.toISOString().slice(0, 10);
+  const period = frequency === 'weekly'
+      ? `this week - from ${from} to ${to}`
+      : `today on ${to}`;
 
   const system = [
     'You are the news editor of a personalized briefing product.',
@@ -124,7 +134,7 @@ function buildMessages(category: CategorySlug, { end }: DateRange): ChatMessage[
 
   // Deliberately one short question: with search grounding doing the work, the
   // long prescriptive prompt mostly produced brittle JSON, not better news.
-  const user = `What are some top ${CATEGORY_LABELS[category]} that I should be aware of today on ${to}?`;
+  const user = `What are some top ${CATEGORY_LABELS[category]} that I should be aware of ${period}?`;
 
   return [
     { role: 'system', content: system },
