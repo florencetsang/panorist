@@ -15,6 +15,7 @@ export const CATEGORY_SLUGS = [
   'sport',
   'entertainment',
   'lifestyle',
+  'technology',
 ] as const;
 
 export type CategorySlug = (typeof CATEGORY_SLUGS)[number];

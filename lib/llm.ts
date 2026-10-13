@@ -102,6 +102,7 @@ const CATEGORY_LABELS: Record<CategorySlug, string> = {
   sport: 'sports news',
   entertainment: 'entertainment news',
   lifestyle: 'lifestyle news',
+  technology: 'technology news',
 };
 
 interface ChatMessage {

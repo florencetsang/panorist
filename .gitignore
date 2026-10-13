@@ -4,3 +4,4 @@ node_modules/
 .idea
 .agents
 docs
+scripts/llm-tuning.ts
