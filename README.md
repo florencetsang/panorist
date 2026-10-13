@@ -48,11 +48,13 @@ demand, not cost-efficiency.
 | --- | --- |
 | `users` | `id uuid pk` (gen_random_uuid), `email` (unique), `timezone` (default `Asia/Hong_Kong`), `created_at` |
 | `preferences` | `user_id uuid pk fk→users`, `frequency` (`daily`\|`weekly`), `delivery_hour` (local hour 0–23, default 8), `categories text[]`, `push_subscription jsonb`, `updated_at` |
-| `reports` | `id bigserial pk`, `user_id fk→users`, `kind`, `period_start`, `period_end`, `content jsonb` (array of `{category, markdown}` — one section per subscribed category), `created_at` |
+| `reports` | `id bigserial pk`, `user_id fk→users`, `kind`, `frequency` (`daily`\|`weekly`), `period_start`, `period_end`, `content jsonb` (array of `{category, markdown}` — one section per subscribed category), `created_at` |
 
 The earliest prototype stored topics as `{category, headline, body, sources}`;
 rows in that legacy shape are best wiped from an existing database:
-`UPDATE reports SET content = '[]'::jsonb;`
+`UPDATE reports SET content = '[]'::jsonb;` To add the `frequency` column to
+an existing database, backfill it from `kind` (which held it until now) — see
+the migration SQL in the commit notes.
 
 Indexes: `reports(user_id, created_at DESC)` for the report list, and
 `preferences(frequency, delivery_hour)` for "who is due now" lookups.

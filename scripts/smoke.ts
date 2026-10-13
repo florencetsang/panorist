@@ -14,7 +14,7 @@ import {
   updatePreferences,
   savePushSubscription,
 } from '../lib/db.ts';
-import { type CategorySlug, type TopicContent } from '../lib/types.ts';
+import { type CategorySlug, type ReportDraft } from '../lib/types.ts';
 
 const SEED_CATEGORIES: CategorySlug[] = ['hong_kong', 'world', 'economics'];
 
@@ -46,17 +46,25 @@ async function main() {
   assert.ok(joined.createdAt instanceof Date);
   assert.ok(joined.updatedAt instanceof Date);
 
-  // 3. saveReport: accepts Date and ISO-string periods.
-  const content: TopicContent[] = [
-    {
-      category: 'hong_kong',
-      markdown: '## Test headline\n\nA comprehensively summarized test topic.\n\n[Example News](https://example.com/article)',
-    },
-  ];
-  const periodStart = new Date(Date.now() - 86_400_000);
-  const periodEnd = new Date();
-  const id1 = await saveReport(userId, 'daily', periodStart, periodEnd, content);
-  const id2 = await saveReport(userId, 'daily', periodStart.toISOString(), periodEnd.toISOString(), content);
+  // 3. saveReport: accepts a ReportDraft with Date or ISO-string periods.
+  const draft: ReportDraft = {
+    kind: 'daily',
+    frequency: 'daily',
+    periodStart: new Date(Date.now() - 86_400_000),
+    periodEnd: new Date(),
+    content: [
+      {
+        category: 'hong_kong',
+        markdown: '## Test headline\n\nA comprehensively summarized test topic.\n\n[Example News](https://example.com/article)',
+      },
+    ],
+  };
+  const id1 = await saveReport(userId, draft);
+  const id2 = await saveReport(userId, {
+    ...draft,
+    periodStart: draft.periodStart.toISOString(),
+    periodEnd: draft.periodEnd.toISOString(),
+  });
   assert.match(id1, /^\d+$/, 'report id should be a numeric string');
   assert.match(id2, /^\d+$/);
 
@@ -66,7 +74,9 @@ async function main() {
   const [newest, second] = reports;
   assert.ok(newest.createdAt >= second.createdAt, 'reports should be newest first');
   assert.ok(newest.createdAt instanceof Date && newest.periodStart instanceof Date);
-  assert.deepEqual(newest.content, content);
+  assert.equal(newest.kind, 'daily');
+  assert.equal(newest.frequency, 'daily');
+  assert.deepEqual(newest.content, draft.content);
 
   // 5. updatePreferences: partial updates only touch given fields.
   await updatePreferences(userId, { frequency: 'weekly', deliveryHour: 9 });

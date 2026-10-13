@@ -23,6 +23,7 @@ import {
   type DateRange,
   type Frequency,
   type Preferences,
+  type ReportDraft,
   type TopicContent,
   type User,
 } from './types.ts';
@@ -69,14 +70,16 @@ export async function generateCategoryMarkdown(
  * category (at most MAX_CONCURRENCY in flight), each yielding one
  * { category, markdown } element in the user's preference order. A category
  * whose call fails is logged and skipped — one flaky request must not kill
- * the report. If every category fails, [] is returned and the cron route
- * decides whether an empty report is worth storing.
+ * the report. Returns the complete ReportDraft (kind, frequency, period,
+ * content) so the cron route can store it with a single saveReport call; if
+ * every category fails, content is [] and the cron route decides whether an
+ * empty report is worth storing.
  */
 export async function generateReport(
   user: User,
   preferences: Preferences,
   dateRange: DateRange,
-): Promise<TopicContent[]> {
+): Promise<ReportDraft> {
   const categories = [...new Set(preferences.categories)]; // defensive dedupe
   const sections = await mapLimit(categories, MAX_CONCURRENCY, async (category) => {
     try {
@@ -92,7 +95,14 @@ export async function generateReport(
       return null;
     }
   });
-  return sections.filter((section): section is TopicContent => section !== null);
+  const content = sections.filter((section): section is TopicContent => section !== null);
+  return {
+    kind: preferences.frequency, // mirrors frequency; left free for future kinds
+    frequency: preferences.frequency,
+    periodStart: dateRange.start,
+    periodEnd: dateRange.end,
+    content,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -130,6 +140,7 @@ function buildMessages(category: CategorySlug, { start, end }: DateRange, freque
     'You are the news editor of a personalized briefing product.',
     'You have web-search capability: you MUST search the web for the requested period and ground every statement in what you find.',
     'Cite any sources that the reader can read as further reading.',
+    'Rule: All sources should be a particular article or report. Omit anything you cannot source. Do not use the generic news website homepage or category page as source. Every "url" must be an accessible real http(s) URL you actually found.',
   ].join(' ');
 
   // Deliberately one short question: with search grounding doing the work, the

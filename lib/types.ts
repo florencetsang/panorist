@@ -62,14 +62,24 @@ export interface TopicContent {
   markdown: string;
 }
 
-export interface Report {
-  id: string; // bigserial → string
-  userId: string;
-  /** Currently the user's frequency ('daily' | 'weekly'); left free for future kinds. */
+/**
+ * A freshly generated report, ready to be stored: everything a `reports` row
+ * needs except the DB-assigned id, user and created_at. `frequency` records
+ * what the user asked for at generation time — it drove the prompt's window
+ * ("today" vs "this week").
+ */
+export interface ReportDraft {
+  /** App-defined kind; currently mirrors `frequency`, left free for future kinds. */
   kind: string;
+  frequency: Frequency;
   periodStart: Date;
   periodEnd: Date;
   content: TopicContent[];
+}
+
+export interface Report extends ReportDraft {
+  id: string; // bigserial → string
+  userId: string;
   createdAt: Date;
 }
 

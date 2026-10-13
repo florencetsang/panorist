@@ -126,10 +126,14 @@ async function main() {
           : assistantResponse(HK_MARKDOWN),
   );
   const report = await generateReport(user, preferences, RANGE);
-  assert.deepEqual(report, [{ category: 'hong_kong', markdown: HK_MARKDOWN }]);
+  assert.equal(report.kind, 'daily');
+  assert.equal(report.frequency, 'daily');
+  assert.equal(report.periodStart, RANGE.start);
+  assert.equal(report.periodEnd, RANGE.end);
+  assert.deepEqual(report.content, [{ category: 'hong_kong', markdown: HK_MARKDOWN }]);
 
-  // 8. No subscribed categories (or all failed) → [], caller decides.
-  assert.deepEqual(await generateReport(user, { ...preferences, categories: [] }, RANGE), []);
+  // 8. No subscribed categories (or all failed) → empty content, caller decides.
+  assert.deepEqual((await generateReport(user, { ...preferences, categories: [] }, RANGE)).content, []);
 
   globalThis.fetch = realFetch;
 
@@ -138,8 +142,8 @@ async function main() {
   //    shape the cron route will store.
   if (liveConfigured) {
     const report = await generateReport(user, preferences, RANGE);
-    console.log(`live: report → ${report.length} section(s):`);
-    for (const { category, markdown } of report) {
+    console.log(`live: ${report.frequency} report → ${report.content.length} section(s):`);
+    for (const { category, markdown } of report.content) {
       console.log(`\n===== ${category} (${markdown.length} chars) =====\n${markdown}\n`);
     }
   } else {

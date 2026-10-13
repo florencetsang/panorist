@@ -31,6 +31,9 @@ CREATE TABLE IF NOT EXISTS reports (
   user_id      uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   -- App-defined kind; currently the user's frequency ('daily' | 'weekly').
   kind         text NOT NULL,
+  -- The user's frequency at generation time — it drives the prompt's time
+  -- window ("today" vs "this week"), so it belongs on the stored report.
+  frequency    text NOT NULL CHECK (frequency IN ('daily', 'weekly')),
   period_start timestamptz NOT NULL,
   period_end   timestamptz NOT NULL,
   -- Array of per-category sections: [{category, markdown}] — the LLM's own
