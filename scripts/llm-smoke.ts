@@ -124,10 +124,15 @@ async function main() {
 
   globalThis.fetch = realFetch;
 
-  // 9. Live round-trip (only when the provider is configured).
+  // 9. Live round-trip (only when the provider is configured): the ENTIRE
+  //    report for the two-category `preferences` fixture — the exact object
+  //    shape the cron route will store.
   if (liveConfigured) {
-    const markdown = await generateCategoryMarkdown('hong_kong', RANGE);
-    console.log(`live: hong_kong → ${markdown.length} chars of markdown:\n\n${markdown}\n`);
+    const report = await generateReport(user, preferences, RANGE);
+    console.log(`live: report → ${report.length} section(s):`);
+    for (const { category, markdown } of report) {
+      console.log(`\n===== ${category} (${markdown.length} chars) =====\n${markdown}\n`);
+    }
   } else {
     console.log('live: LLM_* env not set — skipped');
   }
