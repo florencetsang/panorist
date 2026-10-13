@@ -109,20 +109,18 @@ async function main() {
   assert.equal(calls, 1);
 
   // 7. generateReport: one category 400s — it is logged (see stderr) and
-  //    skipped while the other category still contributes its section,
-  //    wrapped in the "## <category label>" heading.
+  //    skipped while the other category still contributes its section:
+  //    one { category, markdown } element, verbatim, in preference order.
   stubFetch((body) =>
       body.includes('top sports news') // sport's prompt label — request-body routing
           ? new Response('bad request', { status: 400 })
           : assistantResponse(HK_MARKDOWN),
   );
   const report = await generateReport(user, preferences, RANGE);
-  assert.ok(report.startsWith('## Hong Kong news\n\n'), 'section must open with the category heading');
-  assert.ok(report.includes(HK_MARKDOWN), 'the surviving section is the model markdown verbatim');
-  assert.ok(!report.includes('Sports news'), 'the failed category must not appear');
+  assert.deepEqual(report, [{ category: 'hong_kong', markdown: HK_MARKDOWN }]);
 
-  // 8. No subscribed categories (or all failed) → empty string, caller decides.
-  assert.equal(await generateReport(user, { ...preferences, categories: [] }, RANGE), '');
+  // 8. No subscribed categories (or all failed) → [], caller decides.
+  assert.deepEqual(await generateReport(user, { ...preferences, categories: [] }, RANGE), []);
 
   globalThis.fetch = realFetch;
 

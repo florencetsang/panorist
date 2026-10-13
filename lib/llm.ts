@@ -7,9 +7,9 @@
  * plus the three LLM_* env vars (see .env.example). Everything above it talks
  * in prompts and markdown strings, everything below it is plain HTTPS plumbing.
  *
- * Output policy: the model's own markdown IS the report content — no JSON
- * schema, no parsing beyond an empty-response check. The model is a better
- * editor than our validator, so we store what it wrote.
+ * Output policy: the model's own markdown IS the report body — no JSON schema
+ * is enforced on the model and there is no parsing beyond an empty-response
+ * check. Each category's markdown is stored verbatim, tagged with its slug.
  *
  * Scope: content only. This module never touches the database and never sends
  * notifications — the cron route orchestrates both around it.
@@ -22,6 +22,7 @@ import {
   type CategorySlug,
   type DateRange,
   type Preferences,
+  type TopicMarkdown,
   type User,
 } from './types.ts';
 
@@ -61,33 +62,31 @@ export async function generateCategoryMarkdown(
 }
 
 /**
- * Build a whole report as ONE markdown string: one generateCategoryMarkdown
- * call per subscribed category (at most MAX_CONCURRENCY in flight), each
- * contributing a "## <category label>" heading plus the model's markdown,
- * joined by blank lines. A category whose call fails is logged and skipped —
- * one flaky request must not kill the report. If every category fails, '' is
- * returned and the cron route decides whether an empty report is worth
- * storing.
- *
- * The heading is the ONLY wrapper we add around the model's markdown —
- * without it a multi-category report is indistinguishable soup.
+ * Build a whole report: one generateCategoryMarkdown call per subscribed
+ * category (at most MAX_CONCURRENCY in flight), each yielding one
+ * { category, markdown } element in the user's preference order. A category
+ * whose call fails is logged and skipped — one flaky request must not kill
+ * the report. If every category fails, [] is returned and the cron route
+ * decides whether an empty report is worth storing.
  */
 export async function generateReport(
   user: User,
   preferences: Preferences,
   dateRange: DateRange,
-): Promise<string> {
+): Promise<TopicMarkdown[]> {
   const categories = [...new Set(preferences.categories)]; // defensive dedupe
   const sections = await mapLimit(categories, MAX_CONCURRENCY, async (category) => {
     try {
-      const markdown = await generateCategoryMarkdown(category, dateRange);
-      return `## ${CATEGORY_LABELS[category]}\n\n${markdown}`;
+      // Explicit TopicMarkdown: the literal infers category: CategorySlug,
+      // which then fights the filter's type predicate below.
+      const topic: TopicMarkdown = { category, markdown: await generateCategoryMarkdown(category, dateRange) };
+      return topic;
     } catch (err) {
       console.error(`[llm] category "${category}" failed for user ${user.email} — skipping`, err);
       return null;
     }
   });
-  return sections.filter((section): section is string => section !== null).join('\n\n');
+  return sections.filter((section): section is TopicMarkdown => section !== null);
 }
 
 // ---------------------------------------------------------------------------

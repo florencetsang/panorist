@@ -48,11 +48,11 @@ demand, not cost-efficiency.
 | --- | --- |
 | `users` | `id uuid pk` (gen_random_uuid), `email` (unique), `timezone` (default `Asia/Hong_Kong`), `created_at` |
 | `preferences` | `user_id uuid pk fk→users`, `frequency` (`daily`\|`weekly`), `delivery_hour` (local hour 0–23, default 8), `categories text[]`, `push_subscription jsonb`, `updated_at` |
-| `reports` | `id bigserial pk`, `user_id fk→users`, `kind`, `period_start`, `period_end`, `content text` (the LLM's markdown, stored verbatim), `created_at` |
+| `reports` | `id bigserial pk`, `user_id fk→users`, `kind`, `period_start`, `period_end`, `content jsonb` (array of `{category, markdown}` — one section per subscribed category), `created_at` |
 
-Earlier prototypes stored `content` as jsonb; migrate an existing database with
-`ALTER TABLE reports ALTER COLUMN content TYPE text USING '';` (existing rows
-are not worth converting, so they are blanked).
+The earliest prototype stored topics as `{category, headline, body, sources}`;
+rows in that legacy shape are best wiped from an existing database:
+`UPDATE reports SET content = '[]'::jsonb;`
 
 Indexes: `reports(user_id, created_at DESC)` for the report list, and
 `preferences(frequency, delivery_hour)` for "who is due now" lookups.
@@ -75,11 +75,12 @@ web-search-grounded Gemini chat model. The provider seam is ONE function
 tool. (Google's OpenAI-compatible `/chat/completions` cannot enable search
 grounding — prompted to "search the web" without the tool, Gemini 3 emits a
 malformed pseudo-search call and returns an empty `MALFORMED_FUNCTION_CALL`
-response or an HTTP 400.) The model's own markdown IS the report content —
-no JSON schema, only an empty-response check — and each network call has a
-90s timeout with at most 2 retries. `generateReport` runs categories with
-concurrency 3, wraps each in a `## category` heading, and skips (with a log
-line) any category whose call fails.
+response or an HTTP 400.) The model's own markdown IS the report body — no
+JSON schema is enforced on the model, only an empty-response check — and each
+network call has a 90s timeout with at most 2 retries. `generateReport` runs
+categories with concurrency 3, storing each as one `{category, markdown}`
+section (verbatim) and skipping (with a log line) any category whose call
+fails.
 Swapping providers means rewriting that one function plus the LLM_* env vars.
 
 ## Project layout

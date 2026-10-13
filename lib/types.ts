@@ -51,6 +51,16 @@ export interface Preferences {
   updatedAt: Date;
 }
 
+/**
+ * One element of a report's `content` jsonb array: the LLM's markdown for one
+ * subscribed category, stored verbatim; the slug labels the section for
+ * rendering (the model's markdown is never rewritten).
+ */
+export interface TopicMarkdown {
+  category: string;
+  markdown: string;
+}
+
 export interface Report {
   id: string; // bigserial → string
   userId: string;
@@ -58,8 +68,7 @@ export interface Report {
   kind: string;
   periodStart: Date;
   periodEnd: Date;
-  /** The report body: the LLM's markdown, stored verbatim. */
-  content: string;
+  content: TopicMarkdown[];
   createdAt: Date;
 }
 
