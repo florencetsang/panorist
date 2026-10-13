@@ -22,7 +22,7 @@ import {
   type CategorySlug,
   type DateRange,
   type Preferences,
-  type TopicMarkdown,
+  type TopicContent,
   type User,
 } from './types.ts';
 
@@ -73,20 +73,20 @@ export async function generateReport(
   user: User,
   preferences: Preferences,
   dateRange: DateRange,
-): Promise<TopicMarkdown[]> {
+): Promise<TopicContent[]> {
   const categories = [...new Set(preferences.categories)]; // defensive dedupe
   const sections = await mapLimit(categories, MAX_CONCURRENCY, async (category) => {
     try {
-      // Explicit TopicMarkdown: the literal infers category: CategorySlug,
+      // Explicit TopicContent: the literal infers category: CategorySlug,
       // which then fights the filter's type predicate below.
-      const topic: TopicMarkdown = { category, markdown: await generateCategoryMarkdown(category, dateRange) };
+      const topic: TopicContent = { category, markdown: await generateCategoryMarkdown(category, dateRange) };
       return topic;
     } catch (err) {
       console.error(`[llm] category "${category}" failed for user ${user.email} — skipping`, err);
       return null;
     }
   });
-  return sections.filter((section): section is TopicMarkdown => section !== null);
+  return sections.filter((section): section is TopicContent => section !== null);
 }
 
 // ---------------------------------------------------------------------------

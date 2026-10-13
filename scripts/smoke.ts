@@ -14,7 +14,7 @@ import {
   updatePreferences,
   savePushSubscription,
 } from '../lib/db.ts';
-import { type CategorySlug, type TopicMarkdown } from '../lib/types.ts';
+import { type CategorySlug, type TopicContent } from '../lib/types.ts';
 
 const SEED_CATEGORIES: CategorySlug[] = ['hong_kong', 'world', 'economics'];
 
@@ -47,7 +47,7 @@ async function main() {
   assert.ok(joined.updatedAt instanceof Date);
 
   // 3. saveReport: accepts Date and ISO-string periods.
-  const content: TopicMarkdown[] = [
+  const content: TopicContent[] = [
     {
       category: 'hong_kong',
       markdown: '## Test headline\n\nA comprehensively summarized test topic.\n\n[Example News](https://example.com/article)',

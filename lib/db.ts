@@ -19,7 +19,7 @@ import type {
   PreferencesPatch,
   PushSubscriptionJSON,
   Report,
-  TopicMarkdown,
+  TopicContent,
   UserWithPreferences,
 } from './types.ts';
 
@@ -103,7 +103,7 @@ export async function saveReport(
   kind: string,
   periodStart: Date | string,
   periodEnd: Date | string,
-  content: TopicMarkdown[],
+  content: TopicContent[],
 ): Promise<string> {
   // The HTTP transport JSON-encodes parameters, so pass timestamps as ISO text
   // (Postgres infers timestamptz from the column) and jsonb as a JSON string.

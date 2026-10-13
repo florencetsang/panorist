@@ -56,7 +56,7 @@ export interface Preferences {
  * subscribed category, stored verbatim; the slug labels the section for
  * rendering (the model's markdown is never rewritten).
  */
-export interface TopicMarkdown {
+export interface TopicContent {
   category: string;
   markdown: string;
 }
@@ -68,7 +68,7 @@ export interface Report {
   kind: string;
   periodStart: Date;
   periodEnd: Date;
-  content: TopicMarkdown[];
+  content: TopicContent[];
   createdAt: Date;
 }
 
