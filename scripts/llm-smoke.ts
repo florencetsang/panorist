@@ -8,7 +8,7 @@
 import assert from 'node:assert';
 
 import { generateCategoryMarkdown, generateReport } from '../lib/llm.ts';
-import type { Preferences, User } from '../lib/types.ts';
+import type { MarkdownCache, Preferences, User } from '../lib/types.ts';
 
 // A real live round-trip needs real values; the offline tests below stub
 // fetch entirely, so placeholders are enough to satisfy llmEnv()'s fail-fast
@@ -44,6 +44,20 @@ function stubFetch(handler: (body: string) => Response): void {
 // fixture IS the expected result — no normalization left to test.
 const HK_MARKDOWN =
     '## Budget lands with deficit\n\nThe deficit is larger than forecast.\n\n[Example Post](https://example.com/budget)';
+
+/** In-memory MarkdownCache — the reference implementation for these tests:
+ * the cron route passes the Postgres-backed one from lib/db.ts instead. */
+function memoryCache(): { cache: MarkdownCache; store: Map<string, string> } {
+  const store = new Map<string, string>();
+  return {
+    // JSON.stringify of the key literal is canonical: field order is fixed.
+    cache: {
+      get: async (key) => store.get(JSON.stringify(key)) ?? null,
+      set: async (key, markdown) => void store.set(JSON.stringify(key), markdown),
+    },
+    store,
+  };
+}
 
 const user: User = {
   id: '00000000-0000-0000-0000-000000000000',
@@ -118,22 +132,43 @@ async function main() {
   assert.equal(calls, 1);
 
   // 7. generateReport: one category 400s — it is logged (see stderr) and
-  //    skipped while the other category still contributes its section:
-  //    one { category, markdown } element, verbatim, in preference order.
+  //    skipped — while the other is fetched from the LLM, cached, and pointed
+  //    at: content is the list of cache keys, NOT the markdown.
+  const { cache, store } = memoryCache();
   stubFetch((body) =>
       body.includes('top sports news') // sport's prompt label — request-body routing
           ? new Response('bad request', { status: 400 })
           : assistantResponse(HK_MARKDOWN),
   );
-  const report = await generateReport(user, preferences, RANGE);
+  const report = await generateReport(user, preferences, RANGE, cache);
   assert.equal(report.kind, 'daily');
   assert.equal(report.frequency, 'daily');
   assert.equal(report.periodStart, RANGE.start);
   assert.equal(report.periodEnd, RANGE.end);
-  assert.deepEqual(report.content, [{ category: 'hong_kong', markdown: HK_MARKDOWN }]);
+  const hkKey = {
+    category: 'hong_kong',
+    frequency: 'daily' as const,
+    from: RANGE.start.toISOString().slice(0, 10),
+    to: RANGE.end.toISOString().slice(0, 10),
+  };
+  assert.deepEqual(report.content, [hkKey]);
+  assert.equal(store.get(JSON.stringify(hkKey)), HK_MARKDOWN, 'LLM output must land in the cache');
+
+  // 7b. The cached category again → pure cache hit: ZERO LLM calls. (sport is
+  //     left out on purpose — it failed above, so it was never cached and a
+  //     second request would legitimately call the LLM again.) The stub
+  //     betrays any fetch with a 500.
+  let fetched = 0;
+  stubFetch(() => {
+    fetched++;
+    return new Response('cache miss — must not happen', { status: 500 });
+  });
+  const report2 = await generateReport(user, { ...preferences, categories: ['hong_kong'] }, RANGE, cache);
+  assert.equal(fetched, 0, 'a cache hit must skip the LLM entirely');
+  assert.deepEqual(report2.content, [hkKey]);
 
   // 8. No subscribed categories (or all failed) → empty content, caller decides.
-  assert.deepEqual((await generateReport(user, { ...preferences, categories: [] }, RANGE)).content, []);
+  assert.deepEqual((await generateReport(user, { ...preferences, categories: [] }, RANGE, cache)).content, []);
 
   globalThis.fetch = realFetch;
 
@@ -141,10 +176,14 @@ async function main() {
   //    report for the two-category `preferences` fixture — the exact object
   //    shape the cron route will store.
   if (liveConfigured) {
-    const report = await generateReport(user, preferences, RANGE);
+    // Fresh in-memory cache → live LLM calls; the markdown is read back out of
+    // the cache exactly the way getReportMarkdown will hydrate a stored report.
+    const { cache, store } = memoryCache();
+    const report = await generateReport(user, preferences, RANGE, cache);
     console.log(`live: ${report.frequency} report → ${report.content.length} section(s):`);
-    for (const { category, markdown } of report.content) {
-      console.log(`\n===== ${category} (${markdown.length} chars) =====\n${markdown}\n`);
+    for (const key of report.content) {
+      const markdown = store.get(JSON.stringify(key)) ?? '';
+      console.log(`\n===== ${key.category} (${markdown.length} chars) =====\n${markdown}\n`);
     }
   } else {
     console.log('live: LLM_* env not set — skipped');

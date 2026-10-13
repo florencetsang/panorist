@@ -48,7 +48,8 @@ demand, not cost-efficiency.
 | --- | --- |
 | `users` | `id uuid pk` (gen_random_uuid), `email` (unique), `timezone` (default `Asia/Hong_Kong`), `created_at` |
 | `preferences` | `user_id uuid pk fk→users`, `frequency` (`daily`\|`weekly`), `delivery_hour` (local hour 0–23, default 8), `categories text[]`, `push_subscription jsonb`, `updated_at` |
-| `reports` | `id bigserial pk`, `user_id fk→users`, `kind`, `frequency` (`daily`\|`weekly`), `period_start`, `period_end`, `content jsonb` (array of `{category, markdown}` — one section per subscribed category), `created_at` |
+| `reports` | `id bigserial pk`, `user_id fk→users`, `kind`, `frequency` (`daily`\|`weekly`), `period_start`, `period_end`, `content jsonb` (array of cache pointers `{category, frequency, from, to}`), `created_at` |
+| `markdown_cache` | `(category, frequency, from_date, to_date)` pk, `markdown text`, `created_at` — one LLM markdown per exact prompt inputs; users sharing category+window+frequency read the same row instead of each paying for an LLM call |
 
 The earliest prototype stored topics as `{category, headline, body, sources}`;
 rows in that legacy shape are best wiped from an existing database:
@@ -80,9 +81,13 @@ malformed pseudo-search call and returns an empty `MALFORMED_FUNCTION_CALL`
 response or an HTTP 400.) The model's own markdown IS the report body — no
 JSON schema is enforced on the model, only an empty-response check — and each
 network call has a 90s timeout with at most 2 retries. `generateReport` runs
-categories with concurrency 3, storing each as one `{category, markdown}`
-section (verbatim) and skipping (with a log line) any category whose call
-fails.
+categories with concurrency 3 and, per category, first consults an injected
+`MarkdownCache` (lib/db.ts implements it over the `markdown_cache` table):
+a hit skips the LLM entirely, a miss is generated once and cached under its
+exact prompt inputs `{category, frequency, from, to}`. The stored report is a
+list of those pointers — the frontend hydrates them with
+`getReportMarkdown` — and any category whose cache/LLM call fails is skipped
+with a log line (a key is only stored after its markdown is).
 Swapping providers means rewriting that one function plus the LLM_* env vars.
 
 ## Project layout

@@ -53,9 +53,35 @@ export interface Preferences {
 }
 
 /**
- * One element of a report's `content` jsonb array: the LLM's markdown for one
- * subscribed category, stored verbatim; the slug labels the section for
- * rendering (the model's markdown is never rewritten).
+ * The exact inputs of one LLM call: the prompt is a pure function of these
+ * four fields (see buildMessages in lib/llm.ts), so identical keys can share
+ * one stored markdown — that is the whole cache. `from`/`to` are ISO dates
+ * (YYYY-MM-DD), exactly as they appear in the prompt.
+ */
+export interface MarkdownCacheKey {
+  category: string;
+  frequency: Frequency;
+  from: string;
+  to: string;
+}
+
+/**
+ * Pluggable storage for generated markdown, injected into generateReport so
+ * lib/llm.ts itself stays DB-free (the original constraint). Implemented
+ * over the markdown_cache table in lib/db.ts for the cron route; tests pass
+ * an in-memory Map.
+ */
+export interface MarkdownCache {
+  /** Cached markdown for this key, or null on a miss. */
+  get(key: MarkdownCacheKey): Promise<string | null>;
+  /** Store markdown under this key; idempotent — first writer wins. */
+  set(key: MarkdownCacheKey, markdown: string): Promise<void>;
+}
+
+/**
+ * One HYDRATED section of a stored report: a cache pointer resolved back
+ * into { category, markdown } (see getReportMarkdown in lib/db.ts). Report
+ * rows store only the pointers (MarkdownCacheKey[]), not the markdown.
  */
 export interface TopicContent {
   category: string;
@@ -74,7 +100,9 @@ export interface ReportDraft {
   frequency: Frequency;
   periodStart: Date;
   periodEnd: Date;
-  content: TopicContent[];
+  /** The surviving cache pointers, one per subscribed category — the markdown
+   * itself lives in markdown_cache and is resolved by getReportMarkdown. */
+  content: MarkdownCacheKey[];
 }
 
 export interface Report extends ReportDraft {

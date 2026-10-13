@@ -9,10 +9,12 @@
  *
  * Output policy: the model's own markdown IS the report body — no JSON schema
  * is enforced on the model and there is no parsing beyond an empty-response
- * check. Each category's markdown is stored verbatim, tagged with its slug.
+ * check. Each category's markdown is keyed by its exact prompt inputs
+ * (MarkdownCacheKey) so identical requests share one cached LLM call.
  *
  * Scope: content only. This module never touches the database and never sends
- * notifications — the cron route orchestrates both around it.
+ * notifications — cache storage is INJECTED as a MarkdownCache (implemented
+ * over the markdown_cache table in lib/db.ts); the cron route wires it up.
  */
 
 import 'server-only';
@@ -22,9 +24,10 @@ import {
   type CategorySlug,
   type DateRange,
   type Frequency,
+  type MarkdownCache,
+  type MarkdownCacheKey,
   type Preferences,
   type ReportDraft,
-  type TopicContent,
   type User,
 } from './types.ts';
 
@@ -66,36 +69,49 @@ export async function generateCategoryMarkdown(
 }
 
 /**
- * Build a whole report: one generateCategoryMarkdown call per subscribed
- * category (at most MAX_CONCURRENCY in flight), each yielding one
- * { category, markdown } element in the user's preference order. A category
- * whose call fails is logged and skipped — one flaky request must not kill
- * the report. Returns the complete ReportDraft (kind, frequency, period,
- * content) so the cron route can store it with a single saveReport call; if
- * every category fails, content is [] and the cron route decides whether an
- * empty report is worth storing.
+ * Build a whole report, reusing cached markdown wherever possible. Per
+ * subscribed category (at most MAX_CONCURRENCY in flight), the exact prompt
+ * inputs form a MarkdownCacheKey: a cache hit skips the LLM entirely —
+ * users sharing a category, window and frequency read one stored markdown.
+ * On a miss the model is called and the result is cached. The returned
+ * content is the list of surviving keys (pointers the frontend resolves via
+ * lib/db.ts's getReportMarkdown), NOT the markdown itself.
+ *
+ * A category fails and is skipped (logged) when the cache or the LLM call
+ * fails — cache.set must succeed BEFORE we point at the row, so a stored
+ * report never contains a dangling key. Returns the complete ReportDraft so
+ * the cron route can store it with a single saveReport call; if every
+ * category fails, content is [] and the cron route decides whether an empty
+ * report is worth storing.
  */
 export async function generateReport(
   user: User,
   preferences: Preferences,
   dateRange: DateRange,
+  cache: MarkdownCache,
 ): Promise<ReportDraft> {
   const categories = [...new Set(preferences.categories)]; // defensive dedupe
   const sections = await mapLimit(categories, MAX_CONCURRENCY, async (category) => {
+    // Explicit key type: the literal infers category: CategorySlug, which
+    // then fights the filter's type predicate below. The dates are the ISO
+    // date parts, exactly as they appear in the prompt — identical keys mean
+    // identical prompts, which is what makes the cache sound.
+    const key: MarkdownCacheKey = {
+      category,
+      frequency: preferences.frequency,
+      from: dateRange.start.toISOString().slice(0, 10),
+      to: dateRange.end.toISOString().slice(0, 10),
+    };
     try {
-      // Explicit TopicContent: the literal infers category: CategorySlug,
-      // which then fights the filter's type predicate below.
-      const topic: TopicContent = {
-        category,
-        markdown: await generateCategoryMarkdown(category, dateRange, preferences.frequency),
-      };
-      return topic;
+      if ((await cache.get(key)) !== null) return key;
+      await cache.set(key, await generateCategoryMarkdown(category, dateRange, preferences.frequency));
+      return key;
     } catch (err) {
       console.error(`[llm] category "${category}" failed for user ${user.email} — skipping`, err);
       return null;
     }
   });
-  const content = sections.filter((section): section is TopicContent => section !== null);
+  const content = sections.filter((section): section is MarkdownCacheKey => section !== null);
   return {
     kind: preferences.frequency, // mirrors frequency; left free for future kinds
     frequency: preferences.frequency,

@@ -11,10 +11,13 @@ import {
   getUserWithPreferences,
   saveReport,
   getReportsForUser,
+  getCachedMarkdown,
+  saveCachedMarkdown,
+  getReportMarkdown,
   updatePreferences,
   savePushSubscription,
 } from '../lib/db.ts';
-import { type CategorySlug, type ReportDraft } from '../lib/types.ts';
+import { type CategorySlug, type MarkdownCacheKey, type ReportDraft } from '../lib/types.ts';
 
 const SEED_CATEGORIES: CategorySlug[] = ['hong_kong', 'world', 'economics'];
 
@@ -46,18 +49,24 @@ async function main() {
   assert.ok(joined.createdAt instanceof Date);
   assert.ok(joined.updatedAt instanceof Date);
 
-  // 3. saveReport: accepts a ReportDraft with Date or ISO-string periods.
+  // 3. saveReport: accepts a ReportDraft with Date or ISO-string periods;
+  //    content is now an array of markdown-cache POINTERS, not inline markdown.
+  const periodStart = new Date(Date.now() - 86_400_000);
+  const periodEnd = new Date();
+  const cacheKeys: MarkdownCacheKey[] = [
+    {
+      category: 'hong_kong',
+      frequency: 'daily',
+      from: periodStart.toISOString().slice(0, 10),
+      to: periodEnd.toISOString().slice(0, 10),
+    },
+  ];
   const draft: ReportDraft = {
     kind: 'daily',
     frequency: 'daily',
-    periodStart: new Date(Date.now() - 86_400_000),
-    periodEnd: new Date(),
-    content: [
-      {
-        category: 'hong_kong',
-        markdown: '## Test headline\n\nA comprehensively summarized test topic.\n\n[Example News](https://example.com/article)',
-      },
-    ],
+    periodStart,
+    periodEnd,
+    content: cacheKeys,
   };
   const id1 = await saveReport(userId, draft);
   const id2 = await saveReport(userId, {
@@ -65,6 +74,17 @@ async function main() {
     periodStart: draft.periodStart.toISOString(),
     periodEnd: draft.periodEnd.toISOString(),
   });
+
+  // 3b. markdown_cache round-trip: set → get, first-writer-wins on conflict,
+  //     miss → null, and pointer hydration via getReportMarkdown.
+  const MARKDOWN = '## Test headline\n\nA comprehensively summarized test topic.';
+  const key = cacheKeys[0];
+  await saveCachedMarkdown(key, MARKDOWN);
+  assert.equal(await getCachedMarkdown(key), MARKDOWN);
+  await saveCachedMarkdown(key, 'loser write');
+  assert.equal(await getCachedMarkdown(key), MARKDOWN, 'first writer must win (DO NOTHING)');
+  assert.equal(await getCachedMarkdown({ ...key, category: 'world' }), null, 'miss → null');
+  assert.deepEqual(await getReportMarkdown(cacheKeys), [{ category: 'hong_kong', markdown: MARKDOWN }]);
   assert.match(id1, /^\d+$/, 'report id should be a numeric string');
   assert.match(id2, /^\d+$/);
 
@@ -76,7 +96,7 @@ async function main() {
   assert.ok(newest.createdAt instanceof Date && newest.periodStart instanceof Date);
   assert.equal(newest.kind, 'daily');
   assert.equal(newest.frequency, 'daily');
-  assert.deepEqual(newest.content, draft.content);
+  assert.deepEqual(newest.content, cacheKeys);
 
   // 5. updatePreferences: partial updates only touch given fields.
   await updatePreferences(userId, { frequency: 'weekly', deliveryHour: 9 });
@@ -117,9 +137,10 @@ async function main() {
   assert(p);
   assert.equal(p.pushSubscription, null, 'null patch should store SQL NULL, not JSON null');
 
-  // Clean up: restore the seed state and remove the test reports.
+  // Clean up: restore the seed state and remove the test rows (reports + cache).
   await updatePreferences(userId, { frequency: 'daily', deliveryHour: 8, categories: SEED_CATEGORIES });
   await sql`DELETE FROM reports WHERE user_id = ${userId}`;
+  await sql`DELETE FROM markdown_cache`;
 
   console.log('smoke: all lib/db.ts helpers OK');
 }

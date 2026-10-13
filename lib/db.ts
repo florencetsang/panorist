@@ -16,6 +16,8 @@ import 'server-only'; // any client-side import of this module fails the build
 
 import { neon } from '@neondatabase/serverless';
 import type {
+  MarkdownCache,
+  MarkdownCacheKey,
   PreferencesPatch,
   PushSubscriptionJSON,
   Report,
@@ -121,6 +123,56 @@ export async function saveReport(userId: string, draft: ReportDraftInput): Promi
     RETURNING id
   `;
   return (rows[0] as { id: string }).id;
+}
+
+// ---------------------------------------------------------------------------
+// Markdown cache — the Postgres-backed MarkdownCache passed to generateReport
+// ---------------------------------------------------------------------------
+
+/** Look up one cached markdown by its exact prompt inputs; null on miss. */
+export async function getCachedMarkdown(key: MarkdownCacheKey): Promise<string | null> {
+  const rows = await sql`
+    SELECT markdown FROM markdown_cache
+    WHERE category = ${key.category} AND frequency = ${key.frequency}
+      AND from_date = ${key.from} AND to_date = ${key.to}
+    LIMIT 1
+  `;
+  return (rows[0] as { markdown: string } | undefined)?.markdown ?? null;
+}
+
+/**
+ * Store one markdown under its key. ON CONFLICT DO NOTHING: when racing cron
+ * invocations generate the same category+window concurrently, the first
+ * writer wins and the loser's write is discarded harmlessly (both callers
+ * still return the same valid key).
+ */
+export async function saveCachedMarkdown(key: MarkdownCacheKey, markdown: string): Promise<void> {
+  await sql`
+    INSERT INTO markdown_cache (category, frequency, from_date, to_date, markdown)
+    VALUES (${key.category}, ${key.frequency}, ${key.from}, ${key.to}, ${markdown})
+    ON CONFLICT (category, frequency, from_date, to_date) DO NOTHING
+  `;
+}
+
+/** The MarkdownCache implementation the cron route injects into generateReport. */
+export const dbMarkdownCache: MarkdownCache = {
+  get: getCachedMarkdown,
+  set: saveCachedMarkdown,
+};
+
+/**
+ * Resolve a stored report's content pointers into hydrated { category,
+ * markdown } sections — this is what the frontend renders. A missing cache
+ * row should be impossible (generateReport only points at rows it stored),
+ * so it degrades to empty markdown rather than throwing.
+ */
+export async function getReportMarkdown(content: MarkdownCacheKey[]): Promise<TopicContent[]> {
+  return Promise.all(
+      content.map(async (key) => ({
+        category: key.category,
+        markdown: (await getCachedMarkdown(key)) ?? '',
+      })),
+  );
 }
 
 /** A user's recent reports, newest first. */
