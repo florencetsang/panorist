@@ -22,7 +22,6 @@ import 'server-only';
 import {
   CATEGORY_SLUGS,
   type CategorySlug,
-  type DateRange,
   type Frequency,
   type MarkdownCache,
   type MarkdownCacheKey,
@@ -49,8 +48,8 @@ const BACKOFF_BASE_MS = 1_000;
 // ---------------------------------------------------------------------------
 
 /**
- * Ask the model for the news in one category — "today" for daily frequency,
- * the explicit week window for weekly — and return its markdown verbatim.
+ * Ask the model for the news in one category — "today on `to`" for daily,
+ * the derived 7-day window for weekly — and return its markdown verbatim.
  * There is no output schema to enforce — the only validation is the
  * non-emptiness check inside extractAssistantText — so callers get the
  * model's words as-is. Throws on transport failures; callers treat a
@@ -58,14 +57,14 @@ const BACKOFF_BASE_MS = 1_000;
  */
 export async function generateCategoryMarkdown(
   category: string,
-  dateRange: DateRange,
+  to: string,
   frequency: Frequency,
 ): Promise<string> {
   // The DB CHECK already guarantees valid slugs; this guards programmatic misuse.
   if (!(CATEGORY_SLUGS as readonly string[]).includes(category)) {
     throw new Error(`Unknown category "${category}" — expected one of: ${CATEGORY_SLUGS.join(', ')}`);
   }
-  return postChatCompletion(buildMessages(category as CategorySlug, dateRange, frequency));
+  return postChatCompletion(buildMessages(category as CategorySlug, to, frequency));
 }
 
 /**
@@ -77,6 +76,11 @@ export async function generateCategoryMarkdown(
  * content is the list of surviving keys (pointers the frontend resolves via
  * lib/db.ts's getReportMarkdown), NOT the markdown itself.
  *
+ * `to` is the ISO date (YYYY-MM-DD) the window ends on ("today"); frequency
+ * comes from `preferences` — the single source of truth, so the two can
+ * never disagree. The covered period is DERIVED from (to, frequency) inside
+ * reportPeriod, matching the weekly `from` derived in buildMessages.
+ *
  * A category fails and is skipped (logged) when the cache or the LLM call
  * fails — cache.set must succeed BEFORE we point at the row, so a stored
  * report never contains a dangling key. Returns the complete ReportDraft so
@@ -87,23 +91,19 @@ export async function generateCategoryMarkdown(
 export async function generateReport(
   user: User,
   preferences: Preferences,
-  dateRange: DateRange,
+  to: string,
   cache: MarkdownCache,
 ): Promise<ReportDraft> {
+  const { frequency } = preferences;
   const categories = [...new Set(preferences.categories)]; // defensive dedupe
   const sections = await mapLimit(categories, MAX_CONCURRENCY, async (category) => {
     // Explicit key type: the literal infers category: CategorySlug, which
-    // then fights the filter's type predicate below. `to` is the ISO date of
-    // the window's end; frequency implies the window length, so `from` is not
-    // part of the key (see MarkdownCacheKey).
-    const key: MarkdownCacheKey = {
-      category,
-      frequency: preferences.frequency,
-      to: dateRange.end.toISOString().slice(0, 10),
-    };
+    // then fights the filter's type predicate below. `to` is exactly the
+    // cache key's date — no slicing, no second source of truth.
+    const key: MarkdownCacheKey = { category, frequency, to };
     try {
       if ((await cache.get(key)) !== null) return key;
-      await cache.set(key, await generateCategoryMarkdown(category, dateRange, preferences.frequency));
+      await cache.set(key, await generateCategoryMarkdown(category, to, frequency));
       return key;
     } catch (err) {
       console.error(`[llm] category "${category}" failed for user ${user.email} — skipping`, err);
@@ -112,10 +112,9 @@ export async function generateReport(
   });
   const content = sections.filter((section): section is MarkdownCacheKey => section !== null);
   return {
-    kind: preferences.frequency, // mirrors frequency; left free for future kinds
-    frequency: preferences.frequency,
-    periodStart: dateRange.start,
-    periodEnd: dateRange.end,
+    kind: frequency, // mirrors frequency; left free for future kinds
+    frequency,
+    ...reportPeriod(to, frequency),
     content,
   };
 }
@@ -141,14 +140,31 @@ interface ChatMessage {
   content: string;
 }
 
-function buildMessages(category: CategorySlug, { start, end }: DateRange, frequency: Frequency): ChatMessage[] {
-  // "Today" is the end of the window (the cron run's reference date); the
-  // weekly question instead names the whole window — otherwise "today"
-  // would quietly narrow a 7-day digest to the last 24 hours.
-  const from = start.toISOString().slice(0, 10);
-  const to = end.toISOString().slice(0, 10);
+/** ISO calendar date minus n days. UTC-only math — these are plain dates
+ * (YYYY-MM-DD), never wall-clock instants, so no timezone database is needed. */
+const minusDays = (isoDate: string, days: number): string =>
+  new Date(new Date(`${isoDate}T00:00:00Z`).getTime() - days * 86_400_000).toISOString().slice(0, 10);
+
+/**
+ * The period a report covers, derived from (to, frequency): the `to` day for
+ * daily, the 7 days ending on `to` for weekly. Same derivation buildMessages
+ * uses for the weekly `from`, so the stored dates always agree with the
+ * prompt that produced the content.
+ */
+function reportPeriod(to: string, frequency: Frequency): { periodStart: Date; periodEnd: Date } {
+  const startIso = frequency === 'weekly' ? minusDays(to, 7) : to;
+  return {
+    periodStart: new Date(`${startIso}T00:00:00Z`),
+    periodEnd: new Date(`${to}T23:59:59.999Z`), // end of the `to` day
+  };
+}
+
+function buildMessages(category: CategorySlug, to: string, frequency: Frequency): ChatMessage[] {
+  // The weekly window is DERIVED here (to − 7 days) rather than passed in,
+  // so the prompt can never drift from the cache key (category, frequency,
+  // to) that identifies its markdown. Daily asks about "today" alone.
   const period = frequency === 'weekly'
-      ? `this week - from ${from} to ${to}`
+      ? `this week - from ${minusDays(to, 7)} to ${to}`
       : `today on ${to}`;
 
   const system = [

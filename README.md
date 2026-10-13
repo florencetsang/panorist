@@ -71,7 +71,7 @@ users are due on Mondays, local time.
 
 ## LLM
 
-`lib/llm.ts` turns a category + date range + frequency into a markdown string via a
+`lib/llm.ts` turns a category + to-date + frequency into a markdown string via a
 web-search-grounded Gemini chat model. The provider seam is ONE function
 (`postChatCompletion`): a POST to Google's native
 `{LLM_BASE_URL}/models/{LLM_MODEL}:generateContent` with the `google_search`

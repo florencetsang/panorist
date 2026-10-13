@@ -23,7 +23,8 @@ if (!liveConfigured) {
 }
 
 const DAY_MS = 86_400_000;
-const RANGE = { start: new Date(Date.now() - DAY_MS), end: new Date() };
+// The only date input the API now takes: today as an ISO calendar date.
+const TO = new Date().toISOString().slice(0, 10);
 const realFetch = globalThis.fetch;
 
 /** A Gemini-native success response carrying the given assistant text. */
@@ -76,7 +77,7 @@ const preferences: Preferences = {
 
 async function main() {
   // 1. Unknown slug → immediate, clear error.
-  await assert.rejects(generateCategoryMarkdown('not_a_slug', RANGE, 'daily'), /Unknown category/);
+  await assert.rejects(generateCategoryMarkdown('not_a_slug', TO, 'daily'), /Unknown category/);
 
   // 2. Happy path: the model's markdown comes back VERBATIM, and the request
   //    carries exactly the minimal prompt pair. Markdown has no schema to
@@ -86,9 +87,11 @@ async function main() {
     lastBody = body;
     return assistantResponse(HK_MARKDOWN);
   });
-  assert.equal(await generateCategoryMarkdown('hong_kong', RANGE, 'daily'), HK_MARKDOWN);
-  const from = RANGE.start.toISOString().slice(0, 10);
-  const to = RANGE.end.toISOString().slice(0, 10);
+  assert.equal(await generateCategoryMarkdown('hong_kong', TO, 'daily'), HK_MARKDOWN);
+  const to = TO;
+  // The weekly `from` is DERIVED inside buildMessages (to − 7 days), so the
+  // test recomputes it independently rather than trusting the implementation.
+  const from = new Date(new Date(`${TO}T00:00:00Z`).getTime() - 7 * DAY_MS).toISOString().slice(0, 10);
   assert.ok(
       lastBody.includes(`What are some top Hong Kong news that I should be aware of today on ${to}?`),
       'daily user prompt must be the exact one-line question',
@@ -99,7 +102,7 @@ async function main() {
   assert.ok(!lastBody.includes('JSON'), 'the old JSON-schema prompt must be gone');
 
   // 2b. Weekly frequency switches the question to the explicit week window.
-  await generateCategoryMarkdown('hong_kong', RANGE, 'weekly');
+  await generateCategoryMarkdown('hong_kong', TO, 'weekly');
   assert.ok(
       lastBody.includes(`What are some top Hong Kong news that I should be aware of this week - from ${from} to ${to}?`),
       'weekly user prompt must name the week window',
@@ -108,18 +111,18 @@ async function main() {
 
   // 3. Blank text parts → error (never store an empty section silently).
   stubFetch(() => assistantResponse('   '));
-  await assert.rejects(generateCategoryMarkdown('world', RANGE, 'daily'), /no text content/);
+  await assert.rejects(generateCategoryMarkdown('world', TO, 'daily'), /no text content/);
 
   // 4. Non-JSON HTTP 200 body → error.
   stubFetch(() => new Response('<html>gateway error</html>', { status: 200 }));
-  await assert.rejects(generateCategoryMarkdown('world', RANGE, 'daily'), /non-JSON/);
+  await assert.rejects(generateCategoryMarkdown('world', TO, 'daily'), /non-JSON/);
 
   // 5. Transient failure: first attempt 503s, second succeeds (1 backoff sleep).
   let calls = 0;
   stubFetch(() =>
       ++calls === 1 ? new Response('upstream overloaded', { status: 503 }) : assistantResponse(HK_MARKDOWN),
   );
-  await generateCategoryMarkdown('sport', RANGE, 'daily');
+  await generateCategoryMarkdown('sport', TO, 'daily');
   assert.equal(calls, 2);
 
   // 6. Non-retryable HTTP 400 fails after exactly one attempt.
@@ -128,7 +131,7 @@ async function main() {
     calls++;
     return new Response('bad request', { status: 400 });
   });
-  await assert.rejects(generateCategoryMarkdown('sport', RANGE, 'daily'), /HTTP 400/);
+  await assert.rejects(generateCategoryMarkdown('sport', TO, 'daily'), /HTTP 400/);
   assert.equal(calls, 1);
 
   // 7. generateReport: one category 400s — it is logged (see stderr) and
@@ -140,15 +143,16 @@ async function main() {
           ? new Response('bad request', { status: 400 })
           : assistantResponse(HK_MARKDOWN),
   );
-  const report = await generateReport(user, preferences, RANGE, cache);
+  const report = await generateReport(user, preferences, TO, cache);
   assert.equal(report.kind, 'daily');
   assert.equal(report.frequency, 'daily');
-  assert.equal(report.periodStart, RANGE.start);
-  assert.equal(report.periodEnd, RANGE.end);
+  // The covered period is derived from (to, frequency): the `to` day.
+  assert.deepEqual(report.periodStart, new Date(`${TO}T00:00:00Z`));
+  assert.deepEqual(report.periodEnd, new Date(`${TO}T23:59:59.999Z`));
   const hkKey = {
     category: 'hong_kong',
     frequency: 'daily' as const,
-    to: RANGE.end.toISOString().slice(0, 10),
+    to: TO,
   };
   assert.deepEqual(report.content, [hkKey]);
   assert.equal(store.get(JSON.stringify(hkKey)), HK_MARKDOWN, 'LLM output must land in the cache');
@@ -162,12 +166,12 @@ async function main() {
     fetched++;
     return new Response('cache miss — must not happen', { status: 500 });
   });
-  const report2 = await generateReport(user, { ...preferences, categories: ['hong_kong'] }, RANGE, cache);
+  const report2 = await generateReport(user, { ...preferences, categories: ['hong_kong'] }, TO, cache);
   assert.equal(fetched, 0, 'a cache hit must skip the LLM entirely');
   assert.deepEqual(report2.content, [hkKey]);
 
   // 8. No subscribed categories (or all failed) → empty content, caller decides.
-  assert.deepEqual((await generateReport(user, { ...preferences, categories: [] }, RANGE, cache)).content, []);
+  assert.deepEqual((await generateReport(user, { ...preferences, categories: [] }, TO, cache)).content, []);
 
   globalThis.fetch = realFetch;
 
@@ -178,7 +182,7 @@ async function main() {
     // Fresh in-memory cache → live LLM calls; the markdown is read back out of
     // the cache exactly the way getReportMarkdown will hydrate a stored report.
     const { cache, store } = memoryCache();
-    const report = await generateReport(user, preferences, RANGE, cache);
+    const report = await generateReport(user, preferences, TO, cache);
     console.log(`live: ${report.frequency} report → ${report.content.length} section(s):`);
     for (const key of report.content) {
       const markdown = store.get(JSON.stringify(key)) ?? '';
