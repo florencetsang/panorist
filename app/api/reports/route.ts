@@ -9,6 +9,10 @@
 import { getReportsForUser } from '../../../lib/db.ts';
 import { isUuid, jsonError } from '../_lib/validate.ts';
 
+// GET reads live report rows per request (userId query param) — never
+// cache or statically prerender one user's data.
+export const dynamic = 'force-dynamic';
+
 export async function GET(request: Request): Promise<Response> {
   const userId = new URL(request.url).searchParams.get('userId');
   if (!isUuid(userId)) return jsonError(400, 'userId (uuid) query parameter is required');

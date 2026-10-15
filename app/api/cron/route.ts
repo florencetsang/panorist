@@ -30,6 +30,10 @@ import { jsonError } from '../_lib/validate.ts';
 // web-push / node:crypto live in the generate worker, and Buffer below is
 // Node-only — keep this route off the edge runtime too.
 export const runtime = 'nodejs';
+// Always run at request time: the response depends on the Authorization
+// header and the current hour, so a cached response would be wrong (and
+// could serve one tick's user batch to a later tick).
+export const dynamic = 'force-dynamic';
 // Each /api/generate call can run up to its own 60s budget; with
 // CONCURRENCY users in flight the batch needs headroom. At prototype scale
 // (a handful of due users per tick) 60s is comfortable — raise both together

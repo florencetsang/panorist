@@ -14,6 +14,10 @@ import {
   readJsonObject,
 } from '../_lib/validate.ts';
 
+// GET reads the database per request (userId query param) — never cache or
+// statically prerender a response that belongs to one user's data.
+export const dynamic = 'force-dynamic';
+
 // ---------------------------------------------------------------------------
 // PATCH body validation
 // ---------------------------------------------------------------------------
