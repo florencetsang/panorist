@@ -1,14 +1,20 @@
 /**
- * The LLM abstraction: discovers and summarizes news via a web-search-enabled
- * chat model.
+ * The LLM abstraction: fetches the day's news for a category via a
+ * web-search-enabled chat model.
  *
  * Provider-agnostic by design. The ONLY code that knows the wire format is
  * `postChatCompletion` — swapping providers means editing that one function
  * plus the three LLM_* env vars (see .env.example). Everything above it talks
- * in prompts and TopicContent[], everything below it is plain HTTPS plumbing.
+ * in prompts and markdown strings, everything below it is plain HTTPS plumbing.
+ *
+ * Output policy: the model's own markdown IS the report body — no JSON schema
+ * is enforced on the model and there is no parsing beyond an empty-response
+ * check. Each category's markdown is keyed by (category, frequency, to)
+ * (MarkdownCacheKey) so identical requests share one cached LLM call.
  *
  * Scope: content only. This module never touches the database and never sends
- * notifications — the cron route orchestrates both around it.
+ * notifications — cache storage is INJECTED as a MarkdownCache (implemented
+ * over the markdown_cache table in lib/db.ts); the cron route wires it up.
  */
 
 import 'server-only';
@@ -16,10 +22,11 @@ import 'server-only';
 import {
   CATEGORY_SLUGS,
   type CategorySlug,
-  type DateRange,
+  type Frequency,
+  type MarkdownCache,
+  type MarkdownCacheKey,
   type Preferences,
-  type TopicContent,
-  type TopicSource,
+  type ReportDraft,
   type User,
 } from './types.ts';
 
@@ -41,43 +48,75 @@ const BACKOFF_BASE_MS = 1_000;
 // ---------------------------------------------------------------------------
 
 /**
- * Ask the model for the most important news in one category for a date range,
- * as 2-4 distinct topics, each with a headline, a comprehensive multi-paragraph
- * body and real sources. Throws on malformed model output — callers treat a
+ * Ask the model for the news in one category — "today on `to`" for daily,
+ * the derived 7-day window for weekly — and return its markdown verbatim.
+ * There is no output schema to enforce — the only validation is the
+ * non-emptiness check inside extractAssistantText — so callers get the
+ * model's words as-is. Throws on transport failures; callers treat a
  * category as best-effort (see generateReport).
  */
-export async function generateCategoryTopics(
+export async function generateCategoryMarkdown(
   category: string,
-  dateRange: DateRange,
-): Promise<TopicContent[]> {
+  to: string,
+  frequency: Frequency,
+): Promise<string> {
   // The DB CHECK already guarantees valid slugs; this guards programmatic misuse.
   if (!(CATEGORY_SLUGS as readonly string[]).includes(category)) {
     throw new Error(`Unknown category "${category}" — expected one of: ${CATEGORY_SLUGS.join(', ')}`);
   }
-  const raw = await postChatCompletion(buildMessages(category as CategorySlug, dateRange));
-  return validateTopics(parseModelJson(raw), category);
+  return postChatCompletion(buildMessages(category as CategorySlug, to, frequency));
 }
 
 /**
- * Build a whole report: one generateCategoryTopics call per subscribed category
- * (at most MAX_CONCURRENCY in flight), flattened in the user's preference
- * order. A category whose call fails is logged and skipped — one flaky request
- * must not kill the report. If every category fails, [] is returned and the
- * cron route decides whether an empty report is worth storing.
+ * Build a whole report, reusing cached markdown wherever possible. Per
+ * subscribed category (at most MAX_CONCURRENCY in flight), (category,
+ * frequency, to) form a MarkdownCacheKey: a cache hit skips the LLM entirely —
+ * users sharing a category, window and frequency read one stored markdown.
+ * On a miss the model is called and the result is cached. The returned
+ * content is the list of surviving keys (pointers the frontend resolves via
+ * lib/db.ts's getReportMarkdown), NOT the markdown itself.
+ *
+ * `to` is the ISO date (YYYY-MM-DD) the window ends on ("today"); frequency
+ * comes from `preferences` — the single source of truth, so the two can
+ * never disagree. The covered period is DERIVED from (to, frequency) inside
+ * reportPeriod, matching the weekly `from` derived in buildMessages.
+ *
+ * A category fails and is skipped (logged) when the cache or the LLM call
+ * fails — cache.set must succeed BEFORE we point at the row, so a stored
+ * report never contains a dangling key. Returns the complete ReportDraft so
+ * the cron route can store it with a single saveReport call; if every
+ * category fails, content is [] and the cron route decides whether an empty
+ * report is worth storing.
  */
 export async function generateReport(
   user: User,
   preferences: Preferences,
-  dateRange: DateRange,
-): Promise<TopicContent[]> {
+  to: string,
+  cache: MarkdownCache,
+): Promise<ReportDraft> {
+  const { frequency } = preferences;
   const categories = [...new Set(preferences.categories)]; // defensive dedupe
-  const perCategory = await mapLimit(categories, MAX_CONCURRENCY, (category) =>
-    generateCategoryTopics(category, dateRange).catch((err) => {
+  const sections = await mapLimit(categories, MAX_CONCURRENCY, async (category) => {
+    // Explicit key type: the literal infers category: CategorySlug, which
+    // then fights the filter's type predicate below. `to` is exactly the
+    // cache key's date — no slicing, no second source of truth.
+    const key: MarkdownCacheKey = { category, frequency, to };
+    try {
+      if ((await cache.get(key)) !== null) return key;
+      await cache.set(key, await generateCategoryMarkdown(category, to, frequency));
+      return key;
+    } catch (err) {
       console.error(`[llm] category "${category}" failed for user ${user.email} — skipping`, err);
-      return [] as TopicContent[];
-    }),
-  );
-  return perCategory.flat();
+      return null;
+    }
+  });
+  const content = sections.filter((section): section is MarkdownCacheKey => section !== null);
+  return {
+    kind: frequency, // mirrors frequency; left free for future kinds
+    frequency,
+    ...reportPeriod(to, frequency),
+    content,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -86,13 +125,14 @@ export async function generateReport(
 
 /** Prose label per category slug (slugs alone read poorly in a prompt). */
 const CATEGORY_LABELS: Record<CategorySlug, string> = {
-  world: 'world news',
+  world: 'news in the world',
   asia_pacific: 'Asia-Pacific news',
   hong_kong: 'Hong Kong news',
   economics: 'economics and business news',
   sport: 'sports news',
   entertainment: 'entertainment news',
   lifestyle: 'lifestyle news',
+  technology: 'technology news',
 };
 
 interface ChatMessage {
@@ -100,39 +140,43 @@ interface ChatMessage {
   content: string;
 }
 
-function buildMessages(category: CategorySlug, { start, end }: DateRange): ChatMessage[] {
-  const days = Math.max(1, Math.round((end.getTime() - start.getTime()) / 86_400_000));
-  const from = start.toISOString().slice(0, 10);
-  const to = end.toISOString().slice(0, 10);
+/** ISO calendar date minus n days. UTC-only math — these are plain dates
+ * (YYYY-MM-DD), never wall-clock instants, so no timezone database is needed. */
+const minusDays = (isoDate: string, days: number): string =>
+  new Date(new Date(`${isoDate}T00:00:00Z`).getTime() - days * 86_400_000).toISOString().slice(0, 10);
+
+/**
+ * The period a report covers, derived from (to, frequency): the `to` day for
+ * daily, the 7 days ending on `to` for weekly. Same derivation buildMessages
+ * uses for the weekly `from`, so the stored dates always agree with the
+ * prompt that produced the content.
+ */
+function reportPeriod(to: string, frequency: Frequency): { periodStart: Date; periodEnd: Date } {
+  const startIso = frequency === 'weekly' ? minusDays(to, 7) : to;
+  return {
+    periodStart: new Date(`${startIso}T00:00:00Z`),
+    periodEnd: new Date(`${to}T23:59:59.999Z`), // end of the `to` day
+  };
+}
+
+function buildMessages(category: CategorySlug, to: string, frequency: Frequency): ChatMessage[] {
+  // The weekly window is DERIVED here (to − 7 days) rather than passed in,
+  // so the prompt can never drift from the cache key (category, frequency,
+  // to) that identifies its markdown. Daily asks about "today" alone.
+  const period = frequency === 'weekly'
+      ? `this week - from ${minusDays(to, 7)} to ${to}`
+      : `today on ${to}`;
 
   const system = [
     'You are the news editor of a personalized briefing product.',
     'You have web-search capability: you MUST search the web for the requested period and ground every statement in what you find.',
-    'You always answer with strict JSON only — no markdown fences, no commentary before or after.',
+    'Cite any sources that the reader can read as further reading.',
+    'Rule: All sources should be a particular article or report. Omit anything you cannot source. Do not use the generic news website homepage or category page as source. Every "url" must be an accessible real http(s) URL you actually found.',
   ].join(' ');
 
-  const user = [
-    `Identify the most important ${CATEGORY_LABELS[category]} (category slug "${category}") a reader should know about between ${from} and ${to} — a ${days}-day window where ${to} is "today".`,
-    '',
-    'Select the 2 to 4 most important, clearly DISTINCT topics of that window. Distinct means different events or storylines — never two angles of the same story.',
-    '',
-    'For each topic provide:',
-    '- "headline": one clear declarative sentence, at most 15 words, no outlet name.',
-    '- "body": a comprehensive summary in 2-3 paragraphs separated by a blank line (\\n\\n): what happened, the key facts and figures, and why it matters. Write for a busy reader.',
-    '- "sources": 2 to 4 real articles you found via web search; "title" is the article headline, "url" its canonical URL.',
-    '',
-    'Rules: use only information you verified via web search for this window; omit anything you cannot source; every "url" must be a real http(s) URL you actually found.',
-    '',
-    'Respond with ONLY a JSON array matching exactly this schema:',
-    '[',
-    '  {',
-    '    "category": "<the slug given above>",',
-    '    "headline": "string",',
-    '    "body": "string (multi-paragraph, \\n\\n between paragraphs)",',
-    '    "sources": [{ "title": "string", "url": "string" }]',
-    '  }',
-    ']',
-  ].join('\n');
+  // Deliberately one short question: with search grounding doing the work, the
+  // long prescriptive prompt mostly produced brittle JSON, not better news.
+  const user = `What are some top ${CATEGORY_LABELS[category]} that I should be aware of ${period}?`;
 
   return [
     { role: 'system', content: system },
@@ -164,9 +208,9 @@ function buildMessages(category: CategorySlug, { start, end }: DateRange): ChatM
  * (see .env.example): Perplexity sonar / OpenAI *-search-preview are plain
  * OpenAI-compatible POSTs with search built into the model; OpenRouter offers
  * ":online" model ids; xAI takes `search_parameters: { mode: 'on' }` — all can
- * consume the same ChatMessage[] the prompt layer produces. Strict-JSON output
- * stays enforced by prompt + defensive parsing rather than `response_format`,
- * which several search models reject.
+ * consume the same ChatMessage[] the prompt layer produces. Free-form markdown
+ * output means `response_format` is never needed (several search models reject
+ * it anyway).
  */
 async function postChatCompletion(messages: ChatMessage[]): Promise<string> {
   const { baseUrl, apiKey, model } = llmEnv();
@@ -213,7 +257,7 @@ function llmEnv(): { baseUrl: string; apiKey: string; model: string } {
  * Unwraps the assistant's text from a generateContent response: the first
  * candidate's text parts, joined. Search grounding returns ordinary text parts
  * (citations ride along in a separate groundingMetadata field we ignore — the
- * model is told to embed sources in the JSON itself). Thought parts are skipped
+ * model is asked to cite further reading inline). Thought parts are skipped
  * defensively, though they are only produced when explicitly requested.
  */
 function extractAssistantText(rawBody: string): string {
@@ -291,66 +335,6 @@ async function fetchWithRetry(url: string, init: RequestInit): Promise<string> {
     }
   }
   throw lastError;
-}
-
-// ---------------------------------------------------------------------------
-// Output parsing & validation (defensive: models misformat JSON constantly)
-// ---------------------------------------------------------------------------
-
-/** Model text → parsed JSON: strips ``` fences, salvages an array from prose. */
-function parseModelJson(raw: string): unknown {
-  const fenced = /```(?:json)?\s*([\s\S]*?)```/i.exec(raw);
-  const candidate = (fenced ? fenced[1] : raw).trim();
-  try {
-    return JSON.parse(candidate);
-  } catch {
-    // Some models wrap the JSON in a sentence ("Here is your briefing:") or
-    // append usage notes; the report itself is the outermost [...] — salvage it.
-    const start = candidate.indexOf('[');
-    const end = candidate.lastIndexOf(']');
-    if (start !== -1 && end > start) {
-      try {
-        return JSON.parse(candidate.slice(start, end + 1));
-      } catch {
-        /* fall through to the error below */
-      }
-    }
-    throw new Error(`LLM output is not parseable JSON: ${snippet(raw)}`);
-  }
-}
-
-/**
- * Shape-validates the parsed output against TopicContent[] and throws with a
- * precise reason on the first malformed element — during a prototype, loud
- * failures beat silently storing broken reports. One soft spot: "category" is
- * overwritten with the requested slug, because we know which call produced the
- * row, so a mismatch is cosmetic rather than structural.
- */
-function validateTopics(parsed: unknown, category: string): TopicContent[] {
-  if (!Array.isArray(parsed) || parsed.length === 0) {
-    throw new Error(`Expected a non-empty JSON array of topics, got: ${snippet(JSON.stringify(parsed))}`);
-  }
-  return parsed.map((raw, i): TopicContent => {
-    const where = `topic ${i}`;
-    if (typeof raw !== 'object' || raw === null) throw new Error(`${where}: not an object`);
-    const { headline, body, sources } = raw as Record<string, unknown>;
-    if (typeof headline !== 'string' || !headline.trim()) throw new Error(`${where}: missing "headline"`);
-    if (typeof body !== 'string' || !body.trim()) throw new Error(`${where}: missing "body"`);
-    if (!Array.isArray(sources) || sources.length === 0) {
-      throw new Error(`${where}: "sources" must be a non-empty array`);
-    }
-    const cleanSources: TopicSource[] = sources.map((source, j): TopicSource => {
-      const at = `${where} source ${j}`;
-      if (typeof source !== 'object' || source === null) throw new Error(`${at}: not an object`);
-      const { title, url } = source as Record<string, unknown>;
-      if (typeof title !== 'string' || !title.trim()) throw new Error(`${at}: missing "title"`);
-      if (typeof url !== 'string' || !/^https?:\/\//.test(url.trim())) {
-        throw new Error(`${at}: "url" is not a valid http(s) URL: ${String(url)}`);
-      }
-      return { title: title.trim(), url: url.trim() };
-    });
-    return { category, headline: headline.trim(), body: body.trim(), sources: cleanSources };
-  });
 }
 
 // ---------------------------------------------------------------------------

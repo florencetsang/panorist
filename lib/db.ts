@@ -16,9 +16,12 @@ import 'server-only'; // any client-side import of this module fails the build
 
 import { neon } from '@neondatabase/serverless';
 import type {
+  MarkdownCache,
+  MarkdownCacheKey,
   PreferencesPatch,
   PushSubscriptionJSON,
   Report,
+  ReportDraft,
   TopicContent,
   UserWithPreferences,
 } from './types.ts';
@@ -97,31 +100,85 @@ export async function getUserWithPreferences(userId: string): Promise<UserWithPr
   return (rows[0] as unknown as UserWithPreferences) ?? null;
 }
 
-/** Insert a report; returns the new report id. */
-export async function saveReport(
-  userId: string,
-  kind: string,
-  periodStart: Date | string,
-  periodEnd: Date | string,
-  content: TopicContent[],
-): Promise<string> {
-  // The HTTP transport JSON-encodes parameters, so pass timestamps as ISO text
-  // (Postgres infers timestamptz from the column) and jsonb as a JSON string.
+/**
+ * ReportDraft with the period fields relaxed to ISO strings: the HTTP
+ * transport JSON-encodes parameters, and Postgres infers timestamptz from the
+ * column — the driver must not be trusted to serialize Date. (types.ts stays
+ * client-safe with plain `Date`, which is what rows come back as.)
+ */
+type ReportDraftInput = Omit<ReportDraft, 'periodStart' | 'periodEnd'> & {
+  periodStart: Date | string;
+  periodEnd: Date | string;
+};
+
+/** Insert a generated report; returns the new report id. */
+export async function saveReport(userId: string, draft: ReportDraftInput): Promise<string> {
   const toIso = (d: Date | string) => (d instanceof Date ? d.toISOString() : d);
 
   const rows = await sql`
-    INSERT INTO reports (user_id, kind, period_start, period_end, content)
-    VALUES (${userId}, ${kind}, ${toIso(periodStart)}, ${toIso(periodEnd)},
-            ${JSON.stringify(content)}::jsonb)
+    INSERT INTO reports (user_id, kind, frequency, period_start, period_end, content)
+    VALUES (${userId}, ${draft.kind}, ${draft.frequency},
+            ${toIso(draft.periodStart)}, ${toIso(draft.periodEnd)},
+            ${JSON.stringify(draft.content)}::jsonb)
     RETURNING id
   `;
   return (rows[0] as { id: string }).id;
 }
 
+// ---------------------------------------------------------------------------
+// Markdown cache — the Postgres-backed MarkdownCache passed to generateReport
+// ---------------------------------------------------------------------------
+
+/** Look up one cached markdown by its exact prompt inputs; null on miss. */
+export async function getCachedMarkdown(key: MarkdownCacheKey): Promise<string | null> {
+  const rows = await sql`
+    SELECT markdown FROM markdown_cache
+    WHERE category = ${key.category} AND frequency = ${key.frequency}
+      AND to_date = ${key.to}
+    LIMIT 1
+  `;
+  return (rows[0] as { markdown: string } | undefined)?.markdown ?? null;
+}
+
+/**
+ * Store one markdown under its key. ON CONFLICT DO NOTHING: when racing cron
+ * invocations generate the same category+window concurrently, the first
+ * writer wins and the loser's write is discarded harmlessly (both callers
+ * still return the same valid key).
+ */
+export async function saveCachedMarkdown(key: MarkdownCacheKey, markdown: string): Promise<void> {
+  await sql`
+    INSERT INTO markdown_cache (category, frequency, to_date, markdown)
+    VALUES (${key.category}, ${key.frequency}, ${key.to}, ${markdown})
+    ON CONFLICT (category, frequency, to_date) DO NOTHING
+  `;
+}
+
+/** The MarkdownCache implementation the cron route injects into generateReport. */
+export const dbMarkdownCache: MarkdownCache = {
+  get: getCachedMarkdown,
+  set: saveCachedMarkdown,
+};
+
+/**
+ * Resolve a stored report's content pointers into hydrated { category,
+ * markdown } sections — this is what the frontend renders. A missing cache
+ * row should be impossible (generateReport only points at rows it stored),
+ * so it degrades to empty markdown rather than throwing.
+ */
+export async function getReportMarkdown(content: MarkdownCacheKey[]): Promise<TopicContent[]> {
+  return Promise.all(
+      content.map(async (key) => ({
+        category: key.category,
+        markdown: (await getCachedMarkdown(key)) ?? '',
+      })),
+  );
+}
+
 /** A user's recent reports, newest first. */
 export async function getReportsForUser(userId: string, limit = 20): Promise<Report[]> {
   const rows = await sql`
-    SELECT id, user_id AS "userId", kind,
+    SELECT id, user_id AS "userId", kind, frequency,
            period_start AS "periodStart", period_end AS "periodEnd",
            content, created_at AS "createdAt"
     FROM reports

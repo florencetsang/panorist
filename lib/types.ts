@@ -15,17 +15,12 @@ export const CATEGORY_SLUGS = [
   'sport',
   'entertainment',
   'lifestyle',
+  'technology',
 ] as const;
 
 export type CategorySlug = (typeof CATEGORY_SLUGS)[number];
 
 export type Frequency = 'daily' | 'weekly';
-
-/** The window a report covers (e.g. last 24h for daily, last 7 days for weekly). */
-export interface DateRange {
-  start: Date;
-  end: Date;
-}
 
 /** The browser PushSubscription.toJSON() payload; the web-push library consumes this shape. */
 export interface PushSubscriptionJSON {
@@ -51,27 +46,62 @@ export interface Preferences {
   updatedAt: Date;
 }
 
-export interface TopicSource {
-  title: string;
-  url: string;
+/**
+ * The cache identity of one LLM call. `to` is the ISO date (YYYY-MM-DD) the
+ * window ends on ("today"), and `frequency` pins the window length — daily =
+ * that one day, weekly = the 7 days ending on `to` — so `from` is implied
+ * and kept out of the key. Callers must derive weekly ranges as to − 7 days,
+ * or cache rows get shared across slightly different windows.
+ */
+export interface MarkdownCacheKey {
+  category: string;
+  frequency: Frequency;
+  to: string;
 }
 
-/** One element of a report's `content` jsonb array. */
+/**
+ * Pluggable storage for generated markdown, injected into generateReport so
+ * lib/llm.ts itself stays DB-free (the original constraint). Implemented
+ * over the markdown_cache table in lib/db.ts for the cron route; tests pass
+ * an in-memory Map.
+ */
+export interface MarkdownCache {
+  /** Cached markdown for this key, or null on a miss. */
+  get(key: MarkdownCacheKey): Promise<string | null>;
+  /** Store markdown under this key; idempotent — first writer wins. */
+  set(key: MarkdownCacheKey, markdown: string): Promise<void>;
+}
+
+/**
+ * One HYDRATED section of a stored report: a cache pointer resolved back
+ * into { category, markdown } (see getReportMarkdown in lib/db.ts). Report
+ * rows store only the pointers (MarkdownCacheKey[]), not the markdown.
+ */
 export interface TopicContent {
   category: string;
-  headline: string;
-  body: string;
-  sources: TopicSource[];
+  markdown: string;
 }
 
-export interface Report {
-  id: string; // bigserial → string
-  userId: string;
-  /** Currently the user's frequency ('daily' | 'weekly'); left free for future kinds. */
+/**
+ * A freshly generated report, ready to be stored: everything a `reports` row
+ * needs except the DB-assigned id, user and created_at. `frequency` records
+ * what the user asked for at generation time — it drove the prompt's window
+ * ("today" vs "this week").
+ */
+export interface ReportDraft {
+  /** App-defined kind; currently mirrors `frequency`, left free for future kinds. */
   kind: string;
+  frequency: Frequency;
   periodStart: Date;
   periodEnd: Date;
-  content: TopicContent[];
+  /** The surviving cache pointers, one per subscribed category — the markdown
+   * itself lives in markdown_cache and is resolved by getReportMarkdown. */
+  content: MarkdownCacheKey[];
+}
+
+export interface Report extends ReportDraft {
+  id: string; // bigserial → string
+  userId: string;
   createdAt: Date;
 }
 
