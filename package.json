@@ -2,6 +2,7 @@
   "type": "module",
   "scripts": {
     "db:setup": "node scripts/db-setup.mjs",
+    "vapid:generate": "web-push generate-vapid-keys",
     "typecheck": "tsc --noEmit",
     "dev": "next dev",
     "build": "next build",

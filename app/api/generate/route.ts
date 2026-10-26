@@ -94,16 +94,21 @@ export async function POST(request: Request): Promise<Response> {
 
     if (user.pushSubscription) {
       try {
-        // Tiny pointer payload — push payloads cap near 4KB and the client
-        // refetches the full report anyway.
-        await sendPush(user.pushSubscription, { type: 'report', reportId, kind });
-      } catch (err) {
-        const statusCode = (err as { statusCode?: number }).statusCode;
-        if (statusCode === 404 || statusCode === 410) {
-          // The push service says the subscription is gone/expired — clear
-          // it so future cron ticks stop retrying a dead endpoint.
+        // Tiny pointer payload (push payloads cap near 4KB — see lib/push.ts):
+        // say what's ready and where to tap; the client fetches the report
+        // itself. The deep link targets the report page the frontend
+        // milestone serves; public/sw.js opens it on notificationclick.
+        const pushResult = await sendPush(user.pushSubscription, {
+          title: `Panorist — your ${kind} briefing is ready`,
+          body: draft.content.map((key) => key.category.replace(/_/g, ' ')).join(', '),
+          url: `/reports/${reportId}`,
+        });
+        if (pushResult === 'expired') {
+          // Push service answered 404/410: that subscription is gone — null
+          // it out so future cron ticks stop retrying a dead endpoint.
           await updatePreferences(user.id, { pushSubscription: null });
         }
+      } catch (err) {
         // The report is already saved; a failed push must not fail the
         // request. Log server-side and keep going.
         console.error('[api/generate] push failed for report', reportId, err);

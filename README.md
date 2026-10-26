@@ -135,6 +135,40 @@ exported. You should get `{"processed":N,"succeeded":N,"failed":0}` and, if
 the seeded test user is due, a new report plus push in the logs. Omitting or
 mistyping the header returns 401.
 
+## Web push (VAPID)
+
+One keypair per deployment, generated locally with `npm run vapid:generate`
+(wraps `web-push generate-vapid-keys`). Paste it into `.env.local` **and**
+the Vercel dashboard — same drill as `CRON_SECRET`: set the env vars, then
+redeploy, because deployed functions never read `.env.local`.
+
+The flow, end to end:
+
+1. **Subscribe** — `subscribeUser(userId)` (`lib/push-client.ts`) registers
+   `public/sw.js`, asks notification permission, subscribes via
+   `PushManager.subscribe` with the public VAPID key, and POSTs the
+   subscription to `/api/push/subscribe`, which stores it in
+   `preferences.push_subscription`. The key itself is fetched from
+   `GET /api/push/subscribe` (Next only inlines `NEXT_PUBLIC_*` vars into
+   client bundles, so the server hands over the public key instead of
+   duplicating it into a second env var). Denied permission returns
+   `{ok: false, reason: 'denied'}` — nothing subscribed; the UI can hint at
+   browser settings.
+2. **Send** — after saving a report, the generate route calls
+   `sendPush(subscription, {title, body, url})` (`lib/push.ts`). Payloads are
+   encrypted per-subscription but capped near 4KB, so the push is a tiny
+   "something is ready" pointer; the client fetches the report itself.
+3. **Show** — `public/sw.js` (vanilla JS — it runs without the app bundle)
+   listens for `push`, shows the `{title, body}` notification, and on
+   `notificationclick` focuses a tab already open on the report or opens
+   `url`.
+
+Expired subscriptions: the push service answers 404/410 when a subscription
+is gone. `sendPush` logs the dead endpoint and returns `'expired'`, and the
+caller nulls `preferences.push_subscription` out so future cron ticks stop
+retrying it. Push requires a secure context — HTTPS on Vercel, with the
+browser's localhost exemption during `npm run dev`.
+
 ## Project layout
 
 ```
@@ -148,12 +182,18 @@ lib/types.ts         shared types + CATEGORY_SLUGS (pure, client-safe)
 lib/db.ts            typed data-access layer (Neon serverless driver, server-only)
 lib/llm.ts           LLM abstraction: generateCategoryMarkdown / generateReport
                      (provider seam + web-search notes in postChatCompletion)
-lib/push.ts          web-push helper: sendPush(subscription, payload), VAPID-signed
+lib/push.ts          web-push helper: sendPush(subscription, {title, body, url})
+                     → 'sent' | 'expired' (404/410 = subscription gone), VAPID-signed
+lib/push-client.ts   client half: registerServiceWorker() + subscribeUser(userId) —
+                     permission prompt, PushManager subscribe, POST to the server
+public/sw.js         service worker (vanilla JS, scope '/'): 'push' → showNotification,
+                     'notificationclick' → focus/open the report url
 app/api/_lib/validate.ts  request-shape helpers shared by the routes
                      (uuid / JSON body / push-subscription checks, jsonError)
 app/api/reports/route.ts          GET ?userId — recent reports, newest first
 app/api/preferences/route.ts      GET ?userId · PATCH {userId, patch} — read/update prefs
-app/api/push/subscribe/route.ts  POST {userId, subscription} — store web-push sub (204)
+app/api/push/subscribe/route.ts  GET — VAPID public key for the client ·
+                     POST {userId, subscription} — store web-push sub (204)
 app/api/generate/route.ts         POST {userId, kind} — the report worker: guarded by
                      `x-cron-secret` === CRON_SECRET, runs the LLM (with the markdown
                      cache), saves the report, sends a push, returns {reportId}
@@ -168,7 +208,9 @@ scripts/llm-smoke.ts offline stubbed-fetch tests + optional live round-trip
 
 ## Status
 
-Schema, seed, data-access layer, the LLM abstraction (`lib/llm.ts`), the web-push
-helper (`lib/push.ts`), the API routes (`app/api/*`), and scheduled report
-generation (`app/api/cron/route.ts` + the daily Vercel Cron in `vercel.json`)
-are done. The frontend is the next milestone.
+Schema, seed, data-access layer, the LLM abstraction (`lib/llm.ts`), the API
+routes (`app/api/*`), scheduled report generation (`app/api/cron/route.ts` +
+the daily Vercel Cron in `vercel.json`), and web push end to end (server:
+`lib/push.ts`; client: `lib/push-client.ts` + `public/sw.js`) are done. The
+frontend is the next milestone — it will call `subscribeUser()` and render
+the reports the pushes point at.

@@ -1,11 +1,12 @@
 /**
  * Web-push (VAPID) helper: send one notification to a stored subscription.
  *
- * Deliberately DB-free — callers load the subscription from `preferences`
- * and decide what failure means (the generate route, for example, clears
- * subscriptions that the push service reports as gone). web-push is Node-only
- * (https + crypto), so any route importing this module must export
- * `runtime = 'nodejs'`.
+ * Deliberately DB-free — and it has to be: this module only knows the
+ * subscription endpoint, not the user behind it, so it can't null an expired
+ * subscription out of `preferences` itself. Instead sendPush() reports
+ * 'expired' and the caller clears the row (app/api/generate does exactly
+ * that). web-push is Node-only (https + crypto), so any route importing this
+ * module must export `runtime = 'nodejs'`.
  */
 
 import 'server-only';
@@ -19,6 +20,20 @@ import type { PushSubscriptionJSON } from './types.ts';
  * and let the client fetch the actual content.
  */
 const MAX_PAYLOAD_BYTES = 4096;
+
+/**
+ * What one notification shows. `url` is where 'notificationclick' lands —
+ * an app-relative path (e.g. /reports/42) that public/sw.js resolves against
+ * the origin, keeping the payload small.
+ */
+export interface PushPayload {
+  title: string;
+  body: string;
+  url: string;
+}
+
+/** 'expired' = the push service says that subscription is gone (404/410). */
+export type PushResult = 'sent' | 'expired';
 
 let vapidConfigured = false;
 
@@ -39,17 +54,34 @@ function ensureVapid(): void {
 }
 
 /**
- * Send `payload` to one subscription; objects are JSON-stringified.
+ * Send `payload` to one subscription; the object is JSON-stringified for the
+ * service worker (public/sw.js reads {title, body, url}).
  *
- * Rejects on failure. web-push rejects with a WebPushError carrying a
- * `statusCode` from the push service — 404/410 mean the subscription is
- * gone and the caller should stop using it.
+ * A 404/410 from the push service means the subscription was unsubscribed or
+ * lapsed: that endpoint is logged and 'expired' is returned so the caller can
+ * null the stored copy out via db. Every other failure (network, VAPID
+ * auth, payload too large, …) still rejects — those may be transient.
  */
-export async function sendPush(subscription: PushSubscriptionJSON, payload: unknown): Promise<void> {
+export async function sendPush(
+  subscription: PushSubscriptionJSON,
+  payload: PushPayload,
+): Promise<PushResult> {
   ensureVapid();
-  const body = typeof payload === 'string' ? payload : JSON.stringify(payload);
+  const body = JSON.stringify(payload);
   if (Buffer.byteLength(body, 'utf8') > MAX_PAYLOAD_BYTES) {
     throw new Error(`push payload is ${Buffer.byteLength(body)} bytes — push services cap it near 4KB`);
   }
-  await webpush.sendNotification(subscription, body);
+  try {
+    await webpush.sendNotification(subscription, body);
+    return 'sent';
+  } catch (err) {
+    const statusCode = (err as { statusCode?: number }).statusCode;
+    if (statusCode === 404 || statusCode === 410) {
+      console.warn(
+        `[push] subscription expired (push service answered ${statusCode}): ${subscription.endpoint}`,
+      );
+      return 'expired';
+    }
+    throw err;
+  }
 }
