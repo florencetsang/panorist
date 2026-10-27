@@ -1,0 +1,9 @@
+@import "tailwindcss";
+
+/* Prototype-wide tweaks that Tailwind's defaults can't express as utilities.
+   Everything else is utility classes in the components. */
+
+/* Nicer text selection for a reading product (indigo-100). */
+::selection {
+  background-color: #c7d2fe;
+}

@@ -20,6 +20,20 @@ export const CATEGORY_SLUGS = [
 
 export type CategorySlug = (typeof CATEGORY_SLUGS)[number];
 
+/** Short human label per slug, for the frontend (checkboxes, chips).
+ * Prompt phrasing lives separately in lib/llm.ts — it wants sentences
+ * ("Asia-Pacific news"), the UI wants compact nouns. */
+export const CATEGORY_LABELS: Record<CategorySlug, string> = {
+  world: 'World',
+  asia_pacific: 'Asia-Pacific',
+  hong_kong: 'Hong Kong',
+  economics: 'Economics & Business',
+  sport: 'Sport',
+  entertainment: 'Entertainment',
+  lifestyle: 'Lifestyle',
+  technology: 'Technology',
+};
+
 export type Frequency = 'daily' | 'weekly';
 
 /** The browser PushSubscription.toJSON() payload; the web-push library consumes this shape. */
@@ -112,3 +126,23 @@ export type UserWithPreferences = User & Preferences;
 export type PreferencesPatch = Partial<
   Pick<Preferences, 'frequency' | 'deliveryHour' | 'categories' | 'pushSubscription'>
 >;
+
+// ---------------------------------------------------------------------------
+// Wire (HTTP JSON) shapes — same rows, dates as ISO strings
+// ---------------------------------------------------------------------------
+
+/** User ⋈ preferences as GET /api/preferences returns it (JSON-stringified). */
+export type UserWithPreferencesWire = Omit<UserWithPreferences, 'createdAt' | 'updatedAt'> & {
+  createdAt: string;
+  updatedAt: string;
+};
+
+/** GET /api/reports?hydrate=1 — a report row plus its `content` pointers
+ * resolved into renderable { category, markdown } topics. Without `hydrate=1`
+ * the route returns bare rows (content stays pointers). */
+export type HydratedReport = Omit<Report, 'periodStart' | 'periodEnd' | 'createdAt'> & {
+  periodStart: string;
+  periodEnd: string;
+  createdAt: string;
+  topics: TopicContent[];
+};
