@@ -31,6 +31,18 @@ export async function readJsonObject(request: Request): Promise<Record<string, u
 }
 
 /**
+ * Key-shape gate, matched to what web-push will actually encrypt with:
+ * `p256dh` is the 65-byte uncompressed P-256 point (0x04 ‖ X ‖ Y) and `auth`
+ * a ≥16-byte secret (RFC 8291); browsers emit both as unpadded base64url —
+ * exactly 87 chars for p256dh, ≥22 for a 16-byte auth. Without this, junk
+ * from API examples (e.g. the Postman payload) sails into
+ * `preferences.push_subscription` and then breaks every later sendPush(),
+ * since web-push throws before even contacting the push service.
+ */
+const P256DH_RE = /^[A-Za-z0-9_-]{87}$/;
+const AUTH_RE = /^[A-Za-z0-9_-]{22,}$/;
+
+/**
  * Structural check for a browser `PushSubscription.toJSON()` payload — the
  * exact shape web-push consumes and `preferences.push_subscription` stores.
  */
@@ -41,7 +53,12 @@ export function isPushSubscription(value: unknown): value is PushSubscriptionJSO
   const keys = sub.keys;
   if (keys === null || typeof keys !== 'object') return false;
   const { p256dh, auth } = keys as Record<string, unknown>;
-  return typeof p256dh === 'string' && p256dh.length > 0 && typeof auth === 'string' && auth.length > 0;
+  return (
+    typeof p256dh === 'string' &&
+    P256DH_RE.test(p256dh) &&
+    typeof auth === 'string' &&
+    AUTH_RE.test(auth)
+  );
 }
 
 /** Validate a category-slug array (empty allowed — mirrors the DB CHECK). */

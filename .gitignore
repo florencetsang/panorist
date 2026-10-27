@@ -6,3 +6,5 @@ node_modules/
 docs
 scripts/llm-tuning.ts
 .next
+next-env.d.ts
+*tsbuildinfo
