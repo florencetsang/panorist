@@ -82,7 +82,7 @@ export async function GET(request: Request): Promise<Response> {
     // each user's local hour (and local weekday, for weekly users) in SQL.
     const currentUtcHour = new Date().getUTCHours();
     const dueUsers = await getUsersDueForReport(currentUtcHour);
-    console.log("Number of due users: "+dueUsers.length);
+    console.log("Number of users due: "+dueUsers.length+" for currentUtcHour "+currentUtcHour+".");
 
     if (dueUsers.length > 0) {
       // Same-origin self-call: works on Vercel (the request's own host) and
