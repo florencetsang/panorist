@@ -2,9 +2,9 @@
  * GET /api/cron — the scheduler entry point, hit by Vercel Cron (see
  * vercel.json).
  *
- * Schedule rationale: every user is currently daily @ 8am Asia/Hong_Kong,
- * which is exactly 00:00 UTC — so ONE daily cron at "0 0 * * *" covers the
- * whole user base and stays within the Hobby plan's once-a-day cron cap.
+ * Schedule rationale: every user is currently delivered @ 8am Asia/Hong_Kong
+ * time, which is exactly 00:00 UTC — so ONE daily cron at "0 0 * * *" covers
+ * the whole user base and stays within the Hobby plan's once-a-day cron cap.
  * The route still derives the due hour from the current UTC time and asks
  * the database whose LOCAL hour it is (Postgres does the AT TIME ZONE math,
  * DST and half-hour zones included), so when a future multi-timezone user
@@ -12,8 +12,13 @@
  * (Hourly requires Pro, or an external free scheduler curling this route
  * with the same Bearer header; see README "Scheduling".)
  *
+ * Per-frequency note: a due user may produce TWO reports in one tick — on
+ * their local Monday the /api/generate worker runs their daily list AND
+ * their weekly list as separate reports. The POST body is just {userId}: the
+ * worker re-reads preferences and decides per frequency what to generate.
+ *
  * For each due user we POST to /api/generate (the per-user worker that runs
- * the LLM, saves the report and pushes). We call it over HTTP rather than
+ * the LLM, saves the report(s) and pushes). We call it over HTTP rather than
  * importing the handler so the worker's own maxDuration/timeout budget and
  * logs stay isolated per user.
  *
@@ -103,7 +108,7 @@ export async function GET(request: Request): Promise<Response> {
                   // The worker route's own guard (it spends LLM money).
                   'x-cron-secret': process.env.CRON_SECRET!,
                 },
-                body: JSON.stringify({ userId: user.id, kind: user.frequency }),
+                body: JSON.stringify({ userId: user.id }),
               });
               if (res.ok) {
                 succeeded += 1;

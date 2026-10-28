@@ -41,8 +41,9 @@ export const sql = neon(connectionString);
 
 const USER_PREFS_COLUMNS = `
   u.id, u.email, u.timezone, u.created_at AS "createdAt",
-  p.user_id AS "userId", p.frequency, p.delivery_hour AS "deliveryHour",
-  p.categories, p.push_subscription AS "pushSubscription", p.updated_at AS "updatedAt"
+  p.user_id AS "userId", p.delivery_hour AS "deliveryHour",
+  p.daily_categories AS "dailyCategories", p.weekly_categories AS "weeklyCategories",
+  p.push_subscription AS "pushSubscription", p.updated_at AS "updatedAt"
 `;
 
 // ---------------------------------------------------------------------------
@@ -50,23 +51,26 @@ const USER_PREFS_COLUMNS = `
 // ---------------------------------------------------------------------------
 
 /**
- * Users whose report is due this hour.
+ * Users due for AT LEAST ONE report this hour (the /api/generate worker then
+ * decides per frequency — on a local Monday a user can be due for two).
  *
  * Timezone math: `delivery_hour` is a LOCAL wall-clock hour in the user's IANA
  * timezone, but Vercel Cron ticks in UTC and hands us `currentUtcHour` (0–23).
  * We anchor a reference timestamp at "today at 00:00 UTC + currentUtcHour" and
  * let Postgres convert it per user with `AT TIME ZONE users.timezone` — the
  * server's tz database handles UTC offsets, DST and half-hour zones, so no
- * offset math lives in application code. A user is due when the local hour of
- * that instant equals `delivery_hour`.
+ * offset math lives in application code.
  *
- * Frequency schedule: 'daily' users are due every day when the hour matches;
- * 'weekly' users are due only when the *local* weekday is Monday (isodow = 1) —
- * one fixed digest day keeps the prototype simple.
+ * Schedule: a user is due when the local hour matches AND at least one of
+ * their per-frequency lists wants a report now — `daily_categories` is due
+ * every day; `weekly_categories` is due only when the *local* weekday is
+ * Monday (isodow = 1) — one fixed digest day keeps the prototype simple.
+ * Both lists empty ("paused") matches nothing, so such a user is never due
+ * and the worker will simply no-op for them.
  *
  * Scale note: this scans the (tiny) preferences table once per hourly tick,
- * which is fine at prototype size. The `preferences(frequency, delivery_hour)`
- * index serves the constant-parameter form of this lookup if it's ever needed.
+ * which is fine at prototype size. The `preferences(delivery_hour)` index
+ * serves the constant-parameter form of this lookup if it's ever needed.
  */
 export async function getUsersDueForReport(currentUtcHour: number): Promise<UserWithPreferences[]> {
   const now = new Date();
@@ -82,7 +86,10 @@ export async function getUsersDueForReport(currentUtcHour: number): Promise<User
       SELECT (${refInstant.toISOString()}::timestamptz AT TIME ZONE u.timezone) AS local_time
     ) lt
     WHERE p.delivery_hour = extract(hour FROM lt.local_time)::smallint
-      AND (p.frequency = 'daily' OR extract(isodow FROM lt.local_time) = 1)
+      AND (
+        cardinality(p.daily_categories) > 0
+        OR (extract(isodow FROM lt.local_time) = 1 AND cardinality(p.weekly_categories) > 0)
+      )
   `;
 
   return rows as unknown as UserWithPreferences[];
@@ -193,11 +200,12 @@ export async function getReportsForUser(userId: string, limit = 20): Promise<Rep
 export async function updatePreferences(userId: string, patch: PreferencesPatch): Promise<void> {
   // Column names come from the fixed whitelist below (never from user input), so
   // interpolating them into the statement text is safe; all VALUES are bound as
-  // $n parameters.
+  // $n parameters. The per-frequency lists bind as plain array parameters, the
+  // same way the old global `categories` list did.
   const columns: Partial<Record<keyof PreferencesPatch, string>> = {
-    frequency: 'frequency',
     deliveryHour: 'delivery_hour',
-    categories: 'categories',
+    dailyCategories: 'daily_categories',
+    weeklyCategories: 'weekly_categories',
     pushSubscription: 'push_subscription',
   };
 

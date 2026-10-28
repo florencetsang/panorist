@@ -2,6 +2,10 @@
  * GET   /api/preferences?userId=<uuid>  — current preferences (joined user row).
  * PATCH /api/preferences  body {userId, patch}  — partial update, returns the
  *        updated row.
+ *
+ * The patch carries the two per-frequency category lists (dailyCategories /
+ * weeklyCategories) plus the global deliveryHour; either list may be empty —
+ * both empty is the valid "paused" state, so no cross-field validation here.
  */
 
 import { getUserWithPreferences, updatePreferences } from '../../../lib/db.ts';
@@ -22,7 +26,7 @@ export const dynamic = 'force-dynamic';
 // PATCH body validation
 // ---------------------------------------------------------------------------
 
-const PATCH_FIELDS = ['frequency', 'deliveryHour', 'categories', 'pushSubscription'] as const;
+const PATCH_FIELDS = ['deliveryHour', 'dailyCategories', 'weeklyCategories', 'pushSubscription'] as const;
 type PatchField = (typeof PATCH_FIELDS)[number];
 
 /**
@@ -38,10 +42,6 @@ function validatePatch(input: Record<string, unknown>): PreferencesPatch | strin
       return `unknown patch field "${key}" — allowed: ${PATCH_FIELDS.join(', ')}`;
     }
     switch (key as PatchField) {
-      case 'frequency':
-        if (value !== 'daily' && value !== 'weekly') return 'frequency must be "daily" or "weekly"';
-        patch.frequency = value;
-        break;
       case 'deliveryHour':
         // Local wall-clock hour in the user's timezone (schema CHECK: 0–23).
         if (typeof value !== 'number' || !Number.isInteger(value) || value < 0 || value > 23) {
@@ -49,11 +49,20 @@ function validatePatch(input: Record<string, unknown>): PreferencesPatch | strin
         }
         patch.deliveryHour = value;
         break;
-      case 'categories':
+      case 'dailyCategories':
+        // Empty allowed: an empty daily list just means no daily report
+        // (both empty = "paused" — the cron skips the user entirely).
         if (!isCategoryList(value)) {
-          return `categories must be an array of slugs: ${CATEGORY_SLUGS.join(', ')}`;
+          return `dailyCategories must be an array of slugs: ${CATEGORY_SLUGS.join(', ')}`;
         }
-        patch.categories = value;
+        patch.dailyCategories = value;
+        break;
+      case 'weeklyCategories':
+        // Same: empty weekly list = no weekly report.
+        if (!isCategoryList(value)) {
+          return `weeklyCategories must be an array of slugs: ${CATEGORY_SLUGS.join(', ')}`;
+        }
+        patch.weeklyCategories = value;
         break;
       case 'pushSubscription':
         // Null clears the subscription; the dedicated /api/push/subscribe

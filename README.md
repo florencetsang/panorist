@@ -1,8 +1,10 @@
 # Panorist (prototype)
 
-Personalized news briefing: a cron job fires on each user's chosen frequency, asks a
-search-enabled LLM for the most important news per subscribed category, stores the
-result as a report, and sends a web push. The frontend lists past reports and edits
+Personalized news briefing: a cron job fires at each user's chosen delivery
+hour, asks a search-enabled LLM for the most important news per subscribed
+category, stores the result as a report, and sends a web push. Each user
+independently picks which categories go into their DAILY report and which
+into their WEEKLY (Monday) one; the frontend lists past reports and edits
 preferences.
 
 Prototype goals: minimal code, near-zero fixed cost, scales to zero. We validate
@@ -32,9 +34,14 @@ demand, not cost-efficiency.
    ```
 
    This creates the three prototype tables (`users`, `preferences`, `reports`) with
-   their indexes, and seeds a test user (`test@example.com`, daily 08:00 Hong Kong
-   time, categories `hong_kong`, `world`, `economics`). The script is idempotent —
-   safe to re-run.
+   their indexes, and seeds a test user (`test@example.com`, delivery 08:00 Hong Kong
+   time: daily categories `world`, `economics`; weekly category `hong_kong`).
+   The script is idempotent — safe to re-run, including on an existing database
+   created with the old single-frequency preference shape: the migration
+   statements in `db/schema.sql` add the two per-frequency list columns,
+   backfill them from the old global `frequency`/`categories` pair (daily
+   users → `daily_categories`, weekly users → `weekly_categories`) and drop
+   the old pair.
 
    It prefers `DATABASE_URL_UNPOOLED` (Neon's direct connection) because DDL belongs
    on the direct endpoint; the pooled `-pooler` URL is reserved for app query
@@ -47,18 +54,24 @@ demand, not cost-efficiency.
 | Table | Columns |
 | --- | --- |
 | `users` | `id uuid pk` (gen_random_uuid), `email` (unique), `timezone` (default `Asia/Hong_Kong`), `created_at` |
-| `preferences` | `user_id uuid pk fk→users`, `frequency` (`daily`\|`weekly`), `delivery_hour` (local hour 0–23, default 8), `categories text[]`, `push_subscription jsonb`, `updated_at` |
-| `reports` | `id bigserial pk`, `user_id fk→users`, `kind`, `frequency` (`daily`\|`weekly`), `period_start`, `period_end`, `content jsonb` (array of cache pointers `{category, frequency, to}`), `created_at` |
-| `markdown_cache` | `(category, frequency, to_date)` pk, `markdown text`, `created_at` — one LLM markdown per (category, frequency, window end); frequency implies the window length, so a from date would be redundant. Users sharing category+window+frequency read the same row instead of each paying for an LLM call |
+| `preferences` | `user_id uuid pk fk→users`, `delivery_hour` (local hour 0–23, default 8 — one global delivery time per user), `daily_categories text[]`, `weekly_categories text[]` (per-frequency category lists; either may be empty, both empty = the valid "paused" state — the cron never generates anything), `push_subscription jsonb`, `updated_at` |
+| `reports` | `id bigserial pk`, `user_id fk→users`, `kind`, `frequency` (`daily`\|`weekly` — which per-frequency list the report covers; a local-Monday tick can store two reports per user), `period_start`, `period_end`, `content jsonb` (array of cache pointers `{category, frequency, to}`), `created_at` |
+| `markdown_cache` | `(category, frequency, to_date)` pk, `markdown text`, `created_at` — one LLM markdown per (category, frequency, window end); frequency implies the window length, so a from date would be redundant. Users sharing category+window+frequency read the same row instead of each paying for an LLM call; a category in both of a user's lists simply gets two cache rows |
 
 The earliest prototype stored topics as `{category, headline, body, sources}`;
 rows in that legacy shape are best wiped from an existing database:
-`UPDATE reports SET content = '[]'::jsonb;` To add the `frequency` column to
-an existing database, backfill it from `kind` (which held it until now) — see
-the migration SQL in the commit notes.
+`UPDATE reports SET content = '[]'::jsonb;` Later migrations (adding
+`reports.frequency`, then replacing the single global `frequency`/`categories`
+preference with the two per-frequency lists) ship as idempotent statements in
+`db/schema.sql` itself — re-running `npm run db:setup` migrates an existing
+database (old daily users end up with their categories in `daily_categories`,
+old weekly users in `weekly_categories`).
 
 Indexes: `reports(user_id, created_at DESC)` for the report list, and
-`preferences(frequency, delivery_hour)` for "who is due now" lookups.
+`preferences(delivery_hour)` for "who is due now" lookups (the old
+`(frequency, delivery_hour)` shape is gone with the per-user frequency column
+— a user can now be due for a daily report, a weekly one, or both on a local
+Monday).
 
 The data-access layer is split in two: `lib/types.ts` holds the shared types and
 `CATEGORY_SLUGS` (pure — safe to import from client components), while `lib/db.ts`
@@ -66,8 +79,11 @@ holds the typed helpers (plain SQL through the Neon HTTP driver) and starts with
 `import 'server-only'`, so any accidental client import fails the build with a
 clear error. Scheduling semantics: a user is due when the **local** hour in
 their IANA timezone matches `delivery_hour` — the timezone conversion is done by
-Postgres (`AT TIME ZONE`) so DST and half-hour zones are handled for us. Weekly
-users are due on Mondays, local time.
+Postgres (`AT TIME ZONE`) so DST and half-hour zones are handled for us — and at
+least one of their per-frequency lists wants a report now: `daily_categories`
+every day, `weekly_categories` on **Mondays**, local time (the weekly day is
+hardcoded). Both lists empty ("paused") is never due. On a Monday an eligible
+user is due for TWO separate reports — the worker generates one per frequency.
 
 ## LLM
 
@@ -80,11 +96,13 @@ grounding — prompted to "search the web" without the tool, Gemini 3 emits a
 malformed pseudo-search call and returns an empty `MALFORMED_FUNCTION_CALL`
 response or an HTTP 400.) The model's own markdown IS the report body — no
 JSON schema is enforced on the model, only an empty-response check — and each
-network call has a 90s timeout with at most 2 retries. `generateReport` runs
-categories with concurrency 3 and, per category, first consults an injected
-`MarkdownCache` (lib/db.ts implements it over the `markdown_cache` table):
-a hit skips the LLM entirely, a miss is generated once and cached under its
-exact prompt inputs `{category, frequency, from, to}`. The stored report is a
+network call has a 90s timeout with at most 2 retries. `generateReport` takes
+the categories + frequency EXPLICITLY (the /api/generate worker picks which of
+the user's per-frequency lists to run — on a local Monday it calls twice) and
+runs the categories with concurrency 3; per category, it first consults an
+injected `MarkdownCache` (lib/db.ts implements it over the `markdown_cache`
+table): a hit skips the LLM entirely, a miss is generated once and cached under
+its exact prompt inputs `{category, frequency, to}`. The stored report is a
 list of those pointers — the frontend hydrates them with
 `getReportMarkdown` — and any category whose cache/LLM call fails is skipped
 with a log line (a key is only stored after its markdown is).
@@ -94,7 +112,7 @@ Swapping providers means rewriting that one function plus the LLM_* env vars.
 
 `vercel.json` registers a single cron: `{ "crons": [{ "path": "/api/cron", "schedule": "0 0 * * *" }] }`
 — daily at 00:00 UTC. That is exactly **8am Asia/Hong_Kong**, which is where
-all current users sit (daily reports, `delivery_hour` = 8, timezone default
+all current users sit (`delivery_hour` = 8, timezone default
 `Asia/Hong_Kong`), so one daily cron covers the whole user base — and a
 daily cadence is what the Hobby plan allows (it caps cron invocations at once
 per day). The route still matches users by **local** hour: it asks the
@@ -104,6 +122,11 @@ multi-timezone user base eventually needs hourly scans, only the schedule
 in `vercel.json` changes — the code doesn't. (Hourly `0 * * * *` requires
 the Pro plan; JSON forbids comments, so this rationale also lives in the
 route's header comment.)
+
+Per-frequency delivery: a due user may produce TWO reports in one tick —
+on their local Monday the worker generates their daily list AND their weekly
+list as separate reports, both at the same delivery hour. A user whose lists
+are both empty ("paused") is never picked up.
 
 The route is guarded: Vercel Cron sends `Authorization: Bearer <CRON_SECRET>`
 automatically, and anything else gets a 401. For each due user it POSTs to
@@ -154,7 +177,9 @@ The flow, end to end:
    duplicating it into a second env var). Denied permission returns
    `{ok: false, reason: 'denied'}` — nothing subscribed; the UI can hint at
    browser settings.
-2. **Send** — after saving a report, the generate route calls
+2. **Send** — after saving each report (one push per generated report;
+   the title names the frequency — on a Monday that's two pushes), the
+   generate route calls
    `sendPush(subscription, {title, body, url})` (`lib/push.ts`). Payloads are
    encrypted per-subscription but capped near 4KB, so the push is a tiny
    "something is ready" pointer; the client fetches the report itself.
@@ -172,8 +197,10 @@ browser's localhost exemption during `npm run dev`.
 ## Project layout
 
 ```
-db/schema.sql        CREATE TABLE + indexes (idempotent)
-db/seed.sql         one test user + preferences (idempotent)
+db/schema.sql        CREATE TABLE + indexes (idempotent) + the guarded
+                     column migration from the old single-frequency preference
+                     (ADD COLUMN → backfill → DROP COLUMN, safe to re-run)
+db/seed.sql         one test user + per-frequency preferences (idempotent)
 scripts/db-setup.mjs runs schema.sql then seed.sql (npm run db:setup)
 scripts/smoke.ts    exercises every lib/db.ts helper
                     (node --env-file=.env.local --conditions react-server scripts/smoke.ts —
@@ -194,11 +221,17 @@ app/api/reports/route.ts          GET ?userId — recent reports, newest first �
                      ?hydrate=1 — same rows + `content` pointers resolved into
                      renderable {category, markdown} topics (getReportMarkdown)
 app/api/preferences/route.ts      GET ?userId · PATCH {userId, patch} — read/update prefs
+                     (patch fields: deliveryHour, dailyCategories, weeklyCategories,
+                     pushSubscription — unknown keys are rejected with 400)
 app/api/push/subscribe/route.ts  GET — VAPID public key for the client ·
                      POST {userId, subscription} — store web-push sub (204)
-app/api/generate/route.ts         POST {userId, kind} — the report worker: guarded by
-                     `x-cron-secret` === CRON_SECRET, runs the LLM (with the markdown
-                     cache), saves the report, sends a push, returns {reportId}
+app/api/generate/route.ts         POST {userId} — the per-user report worker: guarded
+                     by `x-cron-secret` === CRON_SECRET, re-reads the preferences and
+                     generates one report per due frequency (daily always, weekly on
+                     the local Monday), runs the LLM (with the markdown cache),
+                     saves each report, sends a push per report, returns
+                     {dailyReportId, weeklyReportId} (201; 200 no-op when nothing
+                     is due; 502 when every category of a due report failed)
 app/api/cron/route.ts             GET — scheduler entry point (Vercel Cron sends
                      `Authorization: Bearer ${CRON_SECRET}`); finds due users via
                      getUsersDueForReport and fans out to /api/generate with bounded
@@ -212,8 +245,10 @@ app/nav.tsx          shared header — Reports/Preferences links (carries ?userI
 app/page.tsx         reports list page → app/reports-list.tsx (client): fetch
                      /api/reports?hydrate=1, render each report card (created_at,
                      period, one markdown section per topic)
-app/preferences/     preferences form: category checkboxes, daily/weekly radio,
-                     delivery hour → PATCH /api/preferences, “Saved ✓” flash
+app/preferences/     preferences form: two category checkbox grids (daily /
+                     weekly-Mondays lists — a category may sit in either, both,
+                     or neither), delivery hour → PATCH /api/preferences,
+                     “Saved ✓” flash (both lists empty = paused, with a hint)
 lib/markdown.tsx     dependency-free markdown → React renderer for report bodies
                      (no dangerouslySetInnerHTML; http(s) links only — React
                      escapes everything else)
