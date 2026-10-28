@@ -19,7 +19,8 @@ import {
 } from '../lib/db.ts';
 import { type CategorySlug, type MarkdownCacheKey, type ReportDraft } from '../lib/types.ts';
 
-const SEED_CATEGORIES: CategorySlug[] = ['hong_kong', 'world', 'economics'];
+const SEED_DAILY: CategorySlug[] = ['world', 'economics'];
+const SEED_WEEKLY: CategorySlug[] = ['hong_kong'];
 
 async function main() {
   const utcHour = new Date().getUTCHours();
@@ -30,34 +31,38 @@ async function main() {
   assert(seed, 'seed user missing — run `npm run db:setup` first');
   const userId = seed.id;
 
-  // 1. getUsersDueForReport: daily-@-8 user is due exactly when HK local hour is 8.
+  // 1. getUsersDueForReport: the seed user has a non-empty daily list, so
+  //    they are due exactly when the HK local hour is 8 (any weekday).
   const due = await getUsersDueForReport(utcHour);
   assert.equal(
     due.some((r) => r.email === 'test@example.com'),
     hkLocalHour === 8,
-    'daily user should be due iff local hour is 8',
+    'user with daily categories should be due iff local hour is 8',
   );
 
   // 2. getUserWithPreferences: joined row with all aliased fields.
   const joined = await getUserWithPreferences(userId);
   assert(joined, 'joined row missing');
   assert.equal(joined.email, 'test@example.com');
-  assert.equal(joined.frequency, 'daily');
   assert.equal(joined.deliveryHour, 8);
-  assert.deepEqual(joined.categories, SEED_CATEGORIES);
+  assert.deepEqual(joined.dailyCategories, SEED_DAILY);
+  assert.deepEqual(joined.weeklyCategories, SEED_WEEKLY);
   assert.equal(joined.pushSubscription, null);
   assert.ok(joined.createdAt instanceof Date);
   assert.ok(joined.updatedAt instanceof Date);
 
   // 3. saveReport: accepts a ReportDraft with Date or ISO-string periods;
   //    content is now an array of markdown-cache POINTERS, not inline markdown.
+  //    The cache key's `to` is a fixed past date (not today): real runs cache
+  //    today's rows, and saveCachedMarkdown is first-writer-wins, so a live
+  //    row for "today" would make the round-trip below flap.
   const periodStart = new Date(Date.now() - 86_400_000);
   const periodEnd = new Date();
   const cacheKeys: MarkdownCacheKey[] = [
     {
       category: 'hong_kong',
       frequency: 'daily',
-      to: periodEnd.toISOString().slice(0, 10),
+      to: '2000-01-01',
     },
   ];
   const draft: ReportDraft = {
@@ -98,27 +103,38 @@ async function main() {
   assert.deepEqual(newest.content, cacheKeys);
 
   // 5. updatePreferences: partial updates only touch given fields.
-  await updatePreferences(userId, { frequency: 'weekly', deliveryHour: 9 });
+  await updatePreferences(userId, { deliveryHour: 9 });
   let p = await getUserWithPreferences(userId);
   assert(p);
-  assert.equal(p.frequency, 'weekly');
   assert.equal(p.deliveryHour, 9);
-  assert.deepEqual(p.categories, SEED_CATEGORIES, 'categories must be untouched');
+  assert.deepEqual(p.dailyCategories, SEED_DAILY, 'dailyCategories must be untouched');
+  assert.deepEqual(p.weeklyCategories, SEED_WEEKLY, 'weeklyCategories must be untouched');
 
-  const newCategories: CategorySlug[] = ['world', 'sport'];
-  await updatePreferences(userId, { categories: newCategories });
+  const newDaily: CategorySlug[] = ['world', 'sport'];
+  await updatePreferences(userId, { dailyCategories: newDaily });
   p = await getUserWithPreferences(userId);
   assert(p);
-  assert.deepEqual(p.categories, newCategories);
+  assert.deepEqual(p.dailyCategories, newDaily);
+  assert.deepEqual(p.weeklyCategories, SEED_WEEKLY, 'weeklyCategories must be untouched');
 
-  // 6. weekly schedule: due only on Mondays (local time in the user's timezone).
-  await updatePreferences(userId, { frequency: 'weekly', deliveryHour: hkLocalHour });
+  // 6. weekly-only schedule: a user with an EMPTY daily list and a non-empty
+  //    weekly list is due only on Mondays (local time in their timezone).
+  await updatePreferences(userId, { dailyCategories: [], weeklyCategories: ['hong_kong'], deliveryHour: hkLocalHour });
   const dueNow = await getUsersDueForReport(utcHour);
   const isMondayInHk = new Date(Date.now() + 8 * 3_600_000).getUTCDay() === 1;
   assert.equal(
     dueNow.some((r) => r.email === 'test@example.com'),
     isMondayInHk,
-    'weekly user should be due iff local weekday is Monday',
+    'weekly-only user should be due iff local weekday is Monday',
+  );
+
+  // 6b. paused state: both lists empty → never due, no error.
+  await updatePreferences(userId, { dailyCategories: [], weeklyCategories: [] });
+  const duePaused = await getUsersDueForReport(utcHour);
+  assert.equal(
+    duePaused.some((r) => r.email === 'test@example.com'),
+    false,
+    'paused user (both lists empty) must never be due',
   );
 
   // 7. savePushSubscription round-trip, and clearing to SQL NULL.
@@ -137,7 +153,7 @@ async function main() {
   assert.equal(p.pushSubscription, null, 'null patch should store SQL NULL, not JSON null');
 
   // Clean up: restore the seed state and remove the test rows (reports + cache).
-  await updatePreferences(userId, { frequency: 'daily', deliveryHour: 8, categories: SEED_CATEGORIES });
+  await updatePreferences(userId, { deliveryHour: 8, dailyCategories: SEED_DAILY, weeklyCategories: SEED_WEEKLY });
   await sql`DELETE FROM reports WHERE user_id = ${userId}`;
   await sql`DELETE FROM markdown_cache`;
 

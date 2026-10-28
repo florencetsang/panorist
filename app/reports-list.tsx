@@ -45,7 +45,8 @@ export default function ReportsList({ userId }: { userId: string | null }) {
     <section>
       <h1 className="text-xl font-semibold tracking-tight">Your briefings</h1>
       <p className="mt-1 text-sm text-stone-500">
-        One report per delivery, one section per category you follow.
+        Daily and weekly briefings arrive as separate reports — on Mondays you
+        get one of each, one section per category you picked for it.
       </p>
 
       <div className="mt-6">

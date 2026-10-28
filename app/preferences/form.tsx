@@ -1,9 +1,12 @@
 'use client';
 
 /**
- * Preferences editor: category checkboxes, daily/weekly frequency, delivery
- * hour. Loads GET /api/preferences, saves via PATCH (same route) — the form
- * always sends all three fields, so the server row and the UI can't drift.
+ * Preferences editor: TWO per-frequency category lists — which categories go
+ * into the DAILY report and which into the WEEKLY (local Monday) one — plus
+ * the single global delivery hour. A category may be checked in both, one,
+ * or neither group. Loads GET /api/preferences, saves via PATCH (same route)
+ * — the form always sends all three fields, so the server row and the UI
+ * can't drift.
  */
 
 import { useEffect, useState } from 'react';
@@ -11,7 +14,6 @@ import {
   CATEGORY_LABELS,
   CATEGORY_SLUGS,
   type CategorySlug,
-  type Frequency,
   type UserWithPreferencesWire,
 } from '../../lib/types.ts';
 
@@ -26,12 +28,40 @@ type SaveState =
   | { status: 'saved' }
   | { status: 'error'; message: string };
 
+/** One category-checkbox grid, shared by the daily and weekly groups. */
+function CategoryGrid({
+  selected,
+  onToggle,
+}: {
+  selected: Set<CategorySlug>;
+  onToggle: (slug: CategorySlug) => void;
+}) {
+  return (
+    <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
+      {CATEGORY_SLUGS.map((slug) => (
+        <label
+          key={slug}
+          className="flex cursor-pointer items-center gap-2.5 rounded-lg border border-stone-200 bg-white px-3 py-2.5 text-sm transition-colors has-[:checked]:border-indigo-300 has-[:checked]:bg-indigo-50/60"
+        >
+          <input
+            type="checkbox"
+            checked={selected.has(slug)}
+            onChange={() => onToggle(slug)}
+            className="h-4 w-4 accent-indigo-600"
+          />
+          {CATEGORY_LABELS[slug]}
+        </label>
+      ))}
+    </div>
+  );
+}
+
 export default function PreferencesForm({ userId }: { userId: string | null }) {
   const [load, setLoad] = useState<LoadState>({ status: 'loading' });
   const [save, setSave] = useState<SaveState>({ status: 'idle' });
 
-  const [categories, setCategories] = useState<Set<CategorySlug>>(new Set());
-  const [frequency, setFrequency] = useState<Frequency>('daily');
+  const [dailyCategories, setDailyCategories] = useState<Set<CategorySlug>>(new Set());
+  const [weeklyCategories, setWeeklyCategories] = useState<Set<CategorySlug>>(new Set());
   const [deliveryHour, setDeliveryHour] = useState(8);
   const [timezone, setTimezone] = useState(''); // shown next to the hour field
 
@@ -49,8 +79,8 @@ export default function PreferencesForm({ userId }: { userId: string | null }) {
         if (!res.ok) throw new Error(`GET /api/preferences answered ${res.status}`);
         const prefs = (await res.json()) as UserWithPreferencesWire;
         if (cancelled) return;
-        setCategories(new Set(prefs.categories));
-        setFrequency(prefs.frequency);
+        setDailyCategories(new Set(prefs.dailyCategories));
+        setWeeklyCategories(new Set(prefs.weeklyCategories));
         setDeliveryHour(prefs.deliveryHour);
         setTimezone(prefs.timezone);
         setLoad({ status: 'ready' });
@@ -71,16 +101,18 @@ export default function PreferencesForm({ userId }: { userId: string | null }) {
   // Any edit clears the "Saved" confirmation until the next save.
   const edited = () => setSave({ status: 'idle' });
 
-  function toggleCategory(slug: CategorySlug) {
-    const next = new Set(categories);
+  function toggleIn(set: Set<CategorySlug>, slug: CategorySlug): Set<CategorySlug> {
+    const next = new Set(set);
     if (next.has(slug)) next.delete(slug);
     else next.add(slug);
-    setCategories(next);
-    edited();
+    return next;
   }
 
+  // Both lists empty is the valid "paused" state (no reports generated), so
+  // the only hard requirement is a sane delivery hour.
   const hourValid = Number.isInteger(deliveryHour) && deliveryHour >= 0 && deliveryHour <= 23;
-  const canSave = load.status === 'ready' && categories.size > 0 && hourValid && save.status !== 'saving';
+  const paused = dailyCategories.size === 0 && weeklyCategories.size === 0;
+  const canSave = load.status === 'ready' && hourValid && save.status !== 'saving';
 
   async function onSave() {
     if (!userId || !canSave) return;
@@ -91,15 +123,19 @@ export default function PreferencesForm({ userId }: { userId: string | null }) {
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           userId,
-          patch: { frequency, deliveryHour, categories: [...categories] },
+          patch: {
+            deliveryHour,
+            dailyCategories: [...dailyCategories],
+            weeklyCategories: [...weeklyCategories],
+          },
         }),
       });
       if (!res.ok) throw new Error(`PATCH /api/preferences answered ${res.status}`);
       // The response is the stored row — re-apply it so the UI mirrors the
       // server exactly (fresh updated_at too).
       const prefs = (await res.json()) as UserWithPreferencesWire;
-      setCategories(new Set(prefs.categories));
-      setFrequency(prefs.frequency);
+      setDailyCategories(new Set(prefs.dailyCategories));
+      setWeeklyCategories(new Set(prefs.weeklyCategories));
       setDeliveryHour(prefs.deliveryHour);
       setSave({ status: 'saved' });
     } catch (err) {
@@ -127,60 +163,54 @@ export default function PreferencesForm({ userId }: { userId: string | null }) {
   return (
     <section>
       <h1 className="text-xl font-semibold tracking-tight">Preferences</h1>
-      <p className="mt-1 text-sm text-stone-500">What to cover, and when to deliver it.</p>
+      <p className="mt-1 text-sm text-stone-500">
+        Pick which categories go into your daily and weekly (Mondays) reports.
+      </p>
 
-      {/* Categories — the fixed prototype vocabulary (mirrors the DB CHECK) */}
+      {/* Daily report — the fixed prototype vocabulary (mirrors the DB CHECK) */}
       <fieldset className="mt-6">
-        <legend className="text-sm font-medium text-stone-900">Categories</legend>
-        <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
-          {CATEGORY_SLUGS.map((slug) => (
-            <label
-              key={slug}
-              className="flex cursor-pointer items-center gap-2.5 rounded-lg border border-stone-200 bg-white px-3 py-2.5 text-sm transition-colors has-[:checked]:border-indigo-300 has-[:checked]:bg-indigo-50/60"
-            >
-              <input
-                type="checkbox"
-                checked={categories.has(slug)}
-                onChange={() => toggleCategory(slug)}
-                className="h-4 w-4 accent-indigo-600"
-              />
-              {CATEGORY_LABELS[slug]}
-            </label>
-          ))}
-        </div>
-        {categories.size === 0 && (
-          <p className="mt-2 text-xs text-stone-500">Pick at least one category to save.</p>
+        <legend className="text-sm font-medium text-stone-900">Daily report — categories</legend>
+        <CategoryGrid
+          selected={dailyCategories}
+          onToggle={(slug) => {
+            setDailyCategories((set) => toggleIn(set, slug));
+            edited();
+          }}
+        />
+        {dailyCategories.size === 0 && (
+          <p className="mt-2 text-xs text-stone-500">
+            No daily report — leave this empty if you only want a weekly one.
+          </p>
         )}
       </fieldset>
 
-      {/* Frequency */}
+      {/* Weekly report — same grid, independent selection */}
       <fieldset className="mt-6">
-        <legend className="text-sm font-medium text-stone-900">Frequency</legend>
-        <div className="mt-3 flex gap-2">
-          {(['daily', 'weekly'] as const).map((value) => (
-            <label
-              key={value}
-              className="flex flex-1 cursor-pointer items-center gap-2.5 rounded-lg border border-stone-200 bg-white px-3 py-2.5 text-sm transition-colors has-[:checked]:border-indigo-300 has-[:checked]:bg-indigo-50/60 sm:flex-none sm:px-4"
-            >
-              <input
-                type="radio"
-                name="frequency"
-                value={value}
-                checked={frequency === value}
-                onChange={() => {
-                  setFrequency(value);
-                  edited();
-                }}
-                className="h-4 w-4 accent-indigo-600"
-              />
-              {value === 'daily' ? 'Daily' : 'Weekly (Mondays)'}
-            </label>
-          ))}
-        </div>
+        <legend className="text-sm font-medium text-stone-900">Weekly report (Mondays) — categories</legend>
+        <CategoryGrid
+          selected={weeklyCategories}
+          onToggle={(slug) => {
+            setWeeklyCategories((set) => toggleIn(set, slug));
+            edited();
+          }}
+        />
+        {weeklyCategories.size === 0 && (
+          <p className="mt-2 text-xs text-stone-500">
+            No weekly report — leave this empty if you only want a daily one.
+          </p>
+        )}
       </fieldset>
 
+      {paused && (
+        <p className="mt-4 text-xs text-stone-500">
+          Both lists are empty — you are paused: no reports will be generated
+          until you pick at least one category.
+        </p>
+      )}
+
       {/* Delivery hour — local wall-clock hour in the user's timezone (the
-          cron route lets Postgres do the tz math; see lib/db.ts). */}
+          cron route lets Postgres do the tz math; see lib/db.ts). One global
+          time per user: on a Monday both reports arrive at this hour. */}
       <fieldset className="mt-6">
         <legend className="text-sm font-medium text-stone-900">Delivery hour</legend>
         <div className="mt-3 flex items-center gap-3">

@@ -25,7 +25,6 @@ import {
   type Frequency,
   type MarkdownCache,
   type MarkdownCacheKey,
-  type Preferences,
   type ReportDraft,
   type User,
 } from './types.ts';
@@ -68,35 +67,42 @@ export async function generateCategoryMarkdown(
 }
 
 /**
- * Build a whole report, reusing cached markdown wherever possible. Per
- * subscribed category (at most MAX_CONCURRENCY in flight), (category,
- * frequency, to) form a MarkdownCacheKey: a cache hit skips the LLM entirely —
- * users sharing a category, window and frequency read one stored markdown.
- * On a miss the model is called and the result is cached. The returned
- * content is the list of surviving keys (pointers the frontend resolves via
+ * Build ONE whole report for an explicit (categories, frequency) pair,
+ * reusing cached markdown wherever possible. `categories` and `frequency`
+ * are CALLER-supplied, not read from preferences: a user now has two
+ * per-frequency category lists, and the caller (the /api/generate worker)
+ * decides which lists to run and may call this twice per user per tick — a
+ * local-Monday tick generates the daily report and the weekly report as two
+ * separate ReportDrafts. Every draft covers exactly one frequency.
+ *
+ * Per category (at most MAX_CONCURRENCY in flight), (category, frequency,
+ * to) form a MarkdownCacheKey: a cache hit skips the LLM entirely — users
+ * sharing a category, window and frequency read one stored markdown. On a
+ * miss the model is called and the result is cached. The returned content is
+ * the list of surviving keys (pointers the frontend resolves via
  * lib/db.ts's getReportMarkdown), NOT the markdown itself.
  *
- * `to` is the ISO date (YYYY-MM-DD) the window ends on ("today"); frequency
- * comes from `preferences` — the single source of truth, so the two can
- * never disagree. The covered period is DERIVED from (to, frequency) inside
- * reportPeriod, matching the weekly `from` derived in buildMessages.
+ * `to` is the ISO date (YYYY-MM-DD) the window ends on ("today"). The covered
+ * period is DERIVED from (to, frequency) inside reportPeriod, matching the
+ * weekly `from` derived in buildMessages — so prompt, cache key and stored
+ * period always agree.
  *
  * A category fails and is skipped (logged) when the cache or the LLM call
  * fails — cache.set must succeed BEFORE we point at the row, so a stored
  * report never contains a dangling key. Returns the complete ReportDraft so
- * the cron route can store it with a single saveReport call; if every
- * category fails, content is [] and the cron route decides whether an empty
- * report is worth storing.
+ * the worker can store it with a single saveReport call; if every category
+ * fails, content is [] and the caller decides whether an empty report is
+ * worth storing (it reports the upstream failure instead).
  */
 export async function generateReport(
   user: User,
-  preferences: Preferences,
+  categories: CategorySlug[],
+  frequency: Frequency,
   to: string,
   cache: MarkdownCache,
 ): Promise<ReportDraft> {
-  const { frequency } = preferences;
-  const categories = [...new Set(preferences.categories)]; // defensive dedupe
-  const sections = await mapLimit(categories, MAX_CONCURRENCY, async (category) => {
+  const unique = [...new Set(categories)]; // defensive dedupe
+  const sections = await mapLimit(unique, MAX_CONCURRENCY, async (category) => {
     // Explicit key type: the literal infers category: CategorySlug, which
     // then fights the filter's type predicate below. `to` is exactly the
     // cache key's date — no slicing, no second source of truth.

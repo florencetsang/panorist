@@ -8,7 +8,7 @@
 import assert from 'node:assert';
 
 import { generateCategoryMarkdown, generateReport } from '../lib/llm.ts';
-import type { MarkdownCache, Preferences, User } from '../lib/types.ts';
+import type { CategorySlug, MarkdownCache, User } from '../lib/types.ts';
 
 // A real live round-trip needs real values; the offline tests below stub
 // fetch entirely, so placeholders are enough to satisfy llmEnv()'s fail-fast
@@ -66,14 +66,9 @@ const user: User = {
   timezone: 'Asia/Hong_Kong',
   createdAt: new Date(),
 };
-const preferences: Preferences = {
-  userId: user.id,
-  frequency: 'daily',
-  deliveryHour: 8,
-  categories: ['hong_kong', 'sport'],
-  pushSubscription: null,
-  updatedAt: new Date(),
-};
+// Per-frequency lists live on Preferences now; generateReport takes the
+// categories + frequency EXPLICITLY (the worker picks which list to run).
+const REPORT_CATEGORIES: CategorySlug[] = ['hong_kong', 'sport'];
 
 async function main() {
   // 1. Unknown slug → immediate, clear error.
@@ -143,7 +138,7 @@ async function main() {
           ? new Response('bad request', { status: 400 })
           : assistantResponse(HK_MARKDOWN),
   );
-  const report = await generateReport(user, preferences, TO, cache);
+  const report = await generateReport(user, REPORT_CATEGORIES, 'daily', TO, cache);
   assert.equal(report.kind, 'daily');
   assert.equal(report.frequency, 'daily');
   // The covered period is derived from (to, frequency): the `to` day.
@@ -166,23 +161,23 @@ async function main() {
     fetched++;
     return new Response('cache miss — must not happen', { status: 500 });
   });
-  const report2 = await generateReport(user, { ...preferences, categories: ['hong_kong'] }, TO, cache);
+  const report2 = await generateReport(user, ['hong_kong'], 'daily', TO, cache);
   assert.equal(fetched, 0, 'a cache hit must skip the LLM entirely');
   assert.deepEqual(report2.content, [hkKey]);
 
   // 8. No subscribed categories (or all failed) → empty content, caller decides.
-  assert.deepEqual((await generateReport(user, { ...preferences, categories: [] }, TO, cache)).content, []);
+  assert.deepEqual((await generateReport(user, [], 'daily', TO, cache)).content, []);
 
   globalThis.fetch = realFetch;
 
   // 9. Live round-trip (only when the provider is configured): the ENTIRE
-  //    report for the two-category `preferences` fixture — the exact object
-  //    shape the cron route will store.
+  //    report for the two-category list — the exact object shape the
+  //    generate worker will store.
   if (liveConfigured) {
     // Fresh in-memory cache → live LLM calls; the markdown is read back out of
     // the cache exactly the way getReportMarkdown will hydrate a stored report.
     const { cache, store } = memoryCache();
-    const report = await generateReport(user, preferences, TO, cache);
+    const report = await generateReport(user, REPORT_CATEGORIES, 'daily', TO, cache);
     console.log(`live: ${report.frequency} report → ${report.content.length} section(s):`);
     for (const key of report.content) {
       const markdown = store.get(JSON.stringify(key)) ?? '';

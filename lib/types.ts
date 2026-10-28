@@ -52,10 +52,16 @@ export interface User {
 
 export interface Preferences {
   userId: string;
-  frequency: Frequency;
-  /** Local wall-clock hour (0–23) in the user's timezone. */
+  /** Local wall-clock hour (0–23) in the user's timezone — ONE global
+   * delivery time per user, for both frequencies. */
   deliveryHour: number;
-  categories: CategorySlug[];
+  /** Categories in the DAILY report (generated every day at deliveryHour,
+   * local time). A category may appear here, in weeklyCategories, in both,
+   * or in neither. */
+  dailyCategories: CategorySlug[];
+  /** Categories in the WEEKLY report (generated on the user's local Monday
+   * at deliveryHour). */
+  weeklyCategories: CategorySlug[];
   pushSubscription: PushSubscriptionJSON | null;
   updatedAt: Date;
 }
@@ -99,8 +105,9 @@ export interface TopicContent {
 /**
  * A freshly generated report, ready to be stored: everything a `reports` row
  * needs except the DB-assigned id, user and created_at. `frequency` records
- * what the user asked for at generation time — it drove the prompt's window
- * ("today" vs "this week").
+ * which of the user's per-frequency category lists the report was generated
+ * for ('daily' or 'weekly') — it drives the prompt's time window ("today"
+ * vs "this week"). A local-Monday tick can produce TWO of these for one user.
  */
 export interface ReportDraft {
   /** App-defined kind; currently mirrors `frequency`, left free for future kinds. */
@@ -122,9 +129,11 @@ export interface Report extends ReportDraft {
 /** users ⋈ preferences, as returned by the joined-row helpers in lib/db.ts. */
 export type UserWithPreferences = User & Preferences;
 
-/** Fields of preferences that may be partially updated. */
+/** Fields of preferences that may be partially updated. `frequency` and
+ * `categories` are gone with the single-frequency preference: the two lists
+ * above replace them, and a report's frequency is chosen per generation. */
 export type PreferencesPatch = Partial<
-  Pick<Preferences, 'frequency' | 'deliveryHour' | 'categories' | 'pushSubscription'>
+  Pick<Preferences, 'deliveryHour' | 'dailyCategories' | 'weeklyCategories' | 'pushSubscription'>
 >;
 
 // ---------------------------------------------------------------------------
