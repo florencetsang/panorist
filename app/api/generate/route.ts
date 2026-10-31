@@ -36,7 +36,7 @@ export const runtime = 'nodejs';
 // Search-grounded LLM calls are slow (up to 90s per attempt); the markdown
 // cache keeps shared categories cheap. On a local Monday this runs up to TWO
 // reports back to back — raise on a Pro plan if timeouts bite.
-export const maxDuration = 60;
+export const maxDuration = 300;
 
 /**
  * Secret check. Returns null when authorized, otherwise the response to send.
@@ -82,6 +82,9 @@ async function generateAndStoreOne(
   frequency: Frequency,
   to: string,
 ): Promise<{ id: string } | null> {
+  console.log(
+      `[api/generate] Generating ${frequency} report for user ${user.id}.`
+  )
   const draft: ReportDraft = await generateReport(user, categories, frequency, to, dbMarkdownCache);
   if (draft.content.length === 0) {
     // Every category failed (each is logged inside generateReport) —
