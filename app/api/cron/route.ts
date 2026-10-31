@@ -43,7 +43,7 @@ export const dynamic = 'force-dynamic';
 // CONCURRENCY users in flight the batch needs headroom. At prototype scale
 // (a handful of due users per tick) 60s is comfortable — raise both together
 // on a Pro plan if the due-user count grows.
-export const maxDuration = 60;
+export const maxDuration = 300;
 
 /** Max /api/generate calls in flight at once (matches lib/llm.ts's category
  *  concurrency — the shared markdown cache already collapses duplicate
@@ -101,6 +101,9 @@ export async function GET(request: Request): Promise<Response> {
         await Promise.all(
           batch.map(async (user) => {
             try {
+              console.log(
+                  `[api/cron] Calling /api/generate for user ${user.id}.`
+              )
               const res = await fetch(`${origin}/api/generate`, {
                 method: 'POST',
                 headers: {
@@ -112,6 +115,9 @@ export async function GET(request: Request): Promise<Response> {
               });
               if (res.ok) {
                 succeeded += 1;
+                console.log(
+                    `[api/cron] /api/generate for user ${user.id} succeeded`
+                )
               } else {
                 failed += 1;
                 // Body is the worker's fixed error string — safe to log.
