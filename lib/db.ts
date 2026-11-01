@@ -244,3 +244,31 @@ export async function savePushSubscription(
     WHERE user_id = ${userId}
   `;
 }
+
+// ---------------------------------------------------------------------------
+// Cron run trace — a poor man's log for the Hobby plan (no runtime logs)
+// ---------------------------------------------------------------------------
+
+/**
+ * Record one /api/cron invocation, inserted before anything else in the
+ * handler runs (see app/api/cron/route.ts). `authOk` is the Bearer verdict;
+ * `detail` names the rejection reason for rejected ticks and is stamped
+ * with the tick's outcome later via finishCronRun. Returns the new row id
+ * (bigint → string, like reports.id).
+ */
+export async function saveCronRun(authOk: boolean, detail: string | null): Promise<string> {
+  const rows = await sql`
+    INSERT INTO cron_runs (auth_ok, detail)
+    VALUES (${authOk}, ${detail})
+    RETURNING id
+  `;
+  return (rows[0] as { id: string }).id;
+}
+
+/** Stamp the outcome onto a cron run's detail once the tick finishes. */
+export async function finishCronRun(id: string, detail: string): Promise<void> {
+  await sql`
+    UPDATE cron_runs SET detail = ${detail}
+    WHERE id = ${id}
+  `;
+}

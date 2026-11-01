@@ -25,11 +25,15 @@
  * Auth: Vercel Cron sends `Authorization: Bearer ${CRON_SECRET}`
  * automatically (when the env var is set on the deployment); anything else
  * is rejected with 401.
+ *
+ * Observability: the Hobby plan shows no runtime logs, so EVERY invocation
+ * leaves a trace row in cron_runs (see traceCronRun) — the only way to
+ * verify from outside that a tick reached this route and what it did.
  */
 
 import { timingSafeEqual } from 'node:crypto';
 
-import { getUsersDueForReport } from '../../../lib/db.ts';
+import { finishCronRun, getUsersDueForReport, saveCronRun } from '../../../lib/db.ts';
 import { jsonError } from '../_lib/validate.ts';
 
 // web-push / node:crypto live in the generate worker, and Buffer below is
@@ -73,8 +77,46 @@ function checkAuthorization(request: Request): Response | null {
   return ok ? null : jsonError(401, 'unauthorized');
 }
 
+// ---------------------------------------------------------------------------
+// Invocation trace — the Hobby plan has no runtime logs
+// ---------------------------------------------------------------------------
+
+/**
+ * Record one invocation in cron_runs BEFORE anything else runs: this row is
+ * the only observable proof that Vercel Cron actually reached the route, and
+ * whether the Bearer check passed. Best-effort by design — a failing trace
+ * (table missing, DB hiccup) must never fail the cron itself, it only logs.
+ * Returns the new row id, or null when the trace could not be written.
+ */
+async function traceCronRun(authOk: boolean, detail: string | null): Promise<string | null> {
+  try {
+    return await saveCronRun(authOk, detail);
+  } catch (err) {
+    console.error('[api/cron] failed to record the invocation in cron_runs', err);
+    return null;
+  }
+}
+
+/** Stamp the tick's outcome onto its trace row (no-op when tracing failed). */
+async function finishCronTrace(runId: string | null, detail: string): Promise<void> {
+  if (runId === null) return;
+  try {
+    await finishCronRun(runId, detail);
+  } catch (err) {
+    console.error('[api/cron] failed to stamp the invocation outcome', err);
+  }
+}
+
 export async function GET(request: Request): Promise<Response> {
   const auth = checkAuthorization(request);
+  // Trace first: rejected ticks get a row naming the reason; authorized ticks
+  // get theirs stamped with the outcome before every return below.
+  const authDetail = auth
+    ? auth.status === 401
+      ? 'unauthorized (bad or missing Bearer token)'
+      : 'server misconfigured (CRON_SECRET not set)'
+    : null;
+  const runId = await traceCronRun(auth === null, authDetail);
   if (auth) return auth;
 
   try {
@@ -134,13 +176,22 @@ export async function GET(request: Request): Promise<Response> {
         );
       }
 
+      await finishCronTrace(
+        runId,
+        `processed=${dueUsers.length} succeeded=${succeeded} failed=${failed}`,
+      );
       return Response.json({ processed: dueUsers.length, succeeded, failed });
     }
 
     // Nobody due this hour — still 200 so the cron doesn't look failing.
+    await finishCronTrace(runId, `no users due (currentUtcHour=${currentUtcHour})`);
     return Response.json({ processed: 0, succeeded: 0, failed: 0 });
   } catch (err) {
     console.error('[api/cron] failed', err);
+    await finishCronTrace(
+      runId,
+      `internal error: ${err instanceof Error ? err.message : String(err)}`,
+    );
     return jsonError(500, 'internal error');
   }
 }

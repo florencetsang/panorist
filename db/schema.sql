@@ -146,3 +146,22 @@ CREATE INDEX IF NOT EXISTS reports_user_created_idx ON reports (user_id, created
 -- per-user column — one user can be due for a daily report, a weekly one, or
 -- both on a local Monday — so the hour alone carries the index.
 CREATE INDEX IF NOT EXISTS preferences_due_idx ON preferences (delivery_hour);
+
+-- Cron invocation trace: one row per /api/cron hit, inserted BEFORE anything
+-- else in the handler runs (auth included). The Hobby plan exposes no runtime
+-- logs, so this is the only way to verify that Vercel Cron actually reached
+-- the route and what the Bearer check decided:
+--   no row            -> the platform never invoked the function (schedule /
+--                        stale deployment issue — check the Vercel dashboard)
+--   auth_ok = false   -> the invocation arrived but was rejected (detail says
+--                        why: bad token, or CRON_SECRET not set on the deploy)
+--   auth_ok = true    -> the tick ran; detail is stamped afterwards with the
+--                        outcome ("processed=N succeeded=M failed=K",
+--                        "no users due (currentUtcHour=N)", or the error)
+-- Purely diagnostic — safe to TRUNCATE; nothing reads it from app code.
+CREATE TABLE IF NOT EXISTS cron_runs (
+  id         bigserial PRIMARY KEY,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  auth_ok    boolean NOT NULL,
+  detail     text
+);
