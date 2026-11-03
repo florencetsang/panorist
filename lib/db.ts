@@ -265,10 +265,14 @@ export async function saveCronRun(authOk: boolean, detail: string | null): Promi
   return (rows[0] as { id: string }).id;
 }
 
-/** Stamp the outcome onto a cron run's detail once the tick finishes. */
-export async function finishCronRun(id: string, detail: string): Promise<void> {
+/**
+ * Stamp the outcome onto a cron run's row once the tick finishes: `detail`
+ * always, plus `logs` — the tick's captured log lines when the CRON_DB_LOGS
+ * flag was enabled, null to leave the column empty otherwise.
+ */
+export async function finishCronRun(id: string, detail: string, logs: string | null): Promise<void> {
   await sql`
-    UPDATE cron_runs SET detail = ${detail}
+    UPDATE cron_runs SET detail = ${detail}, logs = ${logs}
     WHERE id = ${id}
   `;
 }
