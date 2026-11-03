@@ -28,7 +28,9 @@
  *
  * Observability: the Hobby plan shows no runtime logs, so EVERY invocation
  * leaves a trace row in cron_runs (see traceCronRun) — the only way to
- * verify from outside that a tick reached this route and what it did.
+ * verify from outside that a tick reached this route and what it did. With
+ * the CRON_DB_LOGS feature flag enabled, the tick's own log lines are ALSO
+ * mirrored into that row's logs column (see makeTickLogger).
  */
 
 import { timingSafeEqual } from 'node:crypto';
@@ -53,6 +55,17 @@ export const maxDuration = 300;
  *  concurrency — the shared markdown cache already collapses duplicate
  *  categories across users, so the real LLM load is far below this). */
 const CONCURRENCY = 3;
+
+/**
+ * Feature flag CRON_DB_LOGS ('1' or 'true'): mirror every log line of a tick
+ * into that tick's cron_runs.logs column, on top of the usual console
+ * output. Off by default — console output happens either way; the flag only
+ * controls the extra DB write per tick (and per line of capture memory).
+ */
+function isDbLogsEnabled(): boolean {
+  const value = process.env.CRON_DB_LOGS;
+  return value === '1' || value === 'true';
+}
 
 /**
  * Bearer check, timing-safe like the generate route: compare the token half
@@ -97,17 +110,59 @@ async function traceCronRun(authOk: boolean, detail: string | null): Promise<str
   }
 }
 
-/** Stamp the tick's outcome onto its trace row (no-op when tracing failed). */
-async function finishCronTrace(runId: string | null, detail: string): Promise<void> {
+/** Stamp the tick's outcome (and captured log lines) onto its trace row
+ *  (no-op when tracing failed). */
+async function finishCronTrace(
+  runId: string | null,
+  detail: string,
+  logs: string | null,
+): Promise<void> {
   if (runId === null) return;
   try {
-    await finishCronRun(runId, detail);
+    await finishCronRun(runId, detail, logs);
   } catch (err) {
     console.error('[api/cron] failed to stamp the invocation outcome', err);
   }
 }
 
+/**
+ * Per-tick log collector. Every line goes to the console either way (what
+ * Pro-plan users see in the dashboard); when the CRON_DB_LOGS flag is
+ * enabled the same lines are also captured for the cron_runs.logs column —
+ * the Hobby-plan poor man's log. Captured lines carry a UTC timestamp so
+ * even a function killed mid-tick leaves a readable partial timeline.
+ */
+function makeTickLogger(enabled: boolean) {
+  const lines: string[] = [];
+  const capture = (message: string): void => {
+    if (!enabled) return;
+    lines.push(`${new Date().toISOString().slice(11, 23)} ${message}`);
+  };
+  return {
+    log(message: string): void {
+      console.log(message);
+      capture(message);
+    },
+    error(message: string, err?: unknown): void {
+      if (err === undefined) console.error(message);
+      else console.error(message, err);
+      // For the DB, fold the error into one line (message + message only —
+      // stacks would bloat the column; the console keeps the full object).
+      capture(
+        err === undefined
+          ? message
+          : `${message}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    },
+    /** Joined lines for cron_runs.logs, or null when the flag is off / nothing captured. */
+    text(): string | null {
+      return enabled && lines.length > 0 ? lines.join('\n') : null;
+    },
+  };
+}
+
 export async function GET(request: Request): Promise<Response> {
+  const tickLogs = makeTickLogger(isDbLogsEnabled());
   const auth = checkAuthorization(request);
   // Trace first: rejected ticks get a row naming the reason; authorized ticks
   // get theirs stamped with the outcome before every return below.
@@ -117,14 +172,19 @@ export async function GET(request: Request): Promise<Response> {
       : 'server misconfigured (CRON_SECRET not set)'
     : null;
   const runId = await traceCronRun(auth === null, authDetail);
-  if (auth) return auth;
+  if (auth) {
+    // authDetail is non-null exactly when auth is; re-stamp the same detail
+    // plus the logs (usually empty on this path).
+    await finishCronTrace(runId, authDetail ?? 'rejected', tickLogs.text());
+    return auth;
+  }
 
   try {
     // The UTC hour this tick belongs to; getUsersDueForReport converts it to
     // each user's local hour (and local weekday, for weekly users) in SQL.
     const currentUtcHour = new Date().getUTCHours();
     const dueUsers = await getUsersDueForReport(currentUtcHour);
-    console.log("Number of users due: "+dueUsers.length+" for currentUtcHour "+currentUtcHour+".");
+    tickLogs.log("Number of users due: "+dueUsers.length+" for currentUtcHour "+currentUtcHour+".");
 
     if (dueUsers.length > 0) {
       // Same-origin self-call: works on Vercel (the request's own host) and
@@ -143,7 +203,7 @@ export async function GET(request: Request): Promise<Response> {
         await Promise.all(
           batch.map(async (user) => {
             try {
-              console.log(
+              tickLogs.log(
                   `[api/cron] Calling /api/generate for user ${user.id}.`
               )
               const res = await fetch(`${origin}/api/generate`, {
@@ -157,20 +217,20 @@ export async function GET(request: Request): Promise<Response> {
               });
               if (res.ok) {
                 succeeded += 1;
-                console.log(
+                tickLogs.log(
                     `[api/cron] /api/generate for user ${user.id} succeeded`
                 )
               } else {
                 failed += 1;
                 // Body is the worker's fixed error string — safe to log.
-                console.error(
+                tickLogs.error(
                   `[api/cron] /api/generate for user ${user.id} ` +
                     `returned ${res.status}: ${await res.text()}`,
                 );
               }
             } catch (err) {
               failed += 1;
-              console.error(`[api/cron] /api/generate for user ${user.id} threw`, err);
+              tickLogs.error(`[api/cron] /api/generate for user ${user.id} threw`, err);
             }
           }),
         );
@@ -179,18 +239,24 @@ export async function GET(request: Request): Promise<Response> {
       await finishCronTrace(
         runId,
         `processed=${dueUsers.length} succeeded=${succeeded} failed=${failed}`,
+        tickLogs.text(),
       );
       return Response.json({ processed: dueUsers.length, succeeded, failed });
     }
 
     // Nobody due this hour — still 200 so the cron doesn't look failing.
-    await finishCronTrace(runId, `no users due (currentUtcHour=${currentUtcHour})`);
+    await finishCronTrace(
+      runId,
+      `no users due (currentUtcHour=${currentUtcHour})`,
+      tickLogs.text(),
+    );
     return Response.json({ processed: 0, succeeded: 0, failed: 0 });
   } catch (err) {
-    console.error('[api/cron] failed', err);
+    tickLogs.error('[api/cron] failed', err);
     await finishCronTrace(
       runId,
       `internal error: ${err instanceof Error ? err.message : String(err)}`,
+      tickLogs.text(),
     );
     return jsonError(500, 'internal error');
   }

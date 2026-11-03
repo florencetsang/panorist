@@ -57,7 +57,7 @@ demand, not cost-efficiency.
 | `preferences` | `user_id uuid pk fk→users`, `delivery_hour` (local hour 0–23, default 8 — one global delivery time per user), `daily_categories text[]`, `weekly_categories text[]` (per-frequency category lists; either may be empty, both empty = the valid "paused" state — the cron never generates anything), `push_subscription jsonb`, `updated_at` |
 | `reports` | `id bigserial pk`, `user_id fk→users`, `kind`, `frequency` (`daily`\|`weekly` — which per-frequency list the report covers; a local-Monday tick can store two reports per user), `period_start`, `period_end`, `content jsonb` (array of cache pointers `{category, frequency, to}`), `created_at` |
 | `markdown_cache` | `(category, frequency, to_date)` pk, `markdown text`, `created_at` — one LLM markdown per (category, frequency, window end); frequency implies the window length, so a from date would be redundant. Users sharing category+window+frequency read the same row instead of each paying for an LLM call; a category in both of a user's lists simply gets two cache rows |
-| `cron_runs` | `id bigserial pk`, `created_at`, `auth_ok boolean`, `detail text` — one diagnostic row per `/api/cron` invocation (Bearer verdict, then the tick's outcome). The Hobby plan has no runtime logs, so this is how you verify cron invocations; safe to TRUNCATE |
+| `cron_runs` | `id bigserial pk`, `created_at`, `auth_ok boolean`, `detail text`, `logs text` (the tick's log lines, captured only while the `CRON_DB_LOGS` flag is enabled) — one diagnostic row per `/api/cron` invocation. The Hobby plan has no runtime logs, so this is how you verify cron invocations; safe to TRUNCATE |
 
 The earliest prototype stored topics as `{category, headline, body, sources}`;
 rows in that legacy shape are best wiped from an existing database:
@@ -185,6 +185,20 @@ How to read it:
 Note an authorized trace row is stamped only when the tick finishes — if
 the function is killed (e.g. the Hobby 60s budget), the row stays with a
 null `detail`, which is itself a useful signal.
+
+### Capturing the tick's logs: the `CRON_DB_LOGS` flag
+
+With `CRON_DB_LOGS=1` (or `true`) set on the deployment — dashboard env var
+plus a redeploy, same drill as `CRON_SECRET` — the `/api/cron` route mirrors
+its log lines (due-user counts, per-user generate calls, failures) into the
+same row's `logs` column, one `HH:MM:SS.mmm <message>` line per entry. Console
+output still happens either way; the flag only adds the DB capture.
+
+Scope note: this captures the `/api/cron` route's own logs. The
+`/api/generate` worker runs as a separate function invocation, so ITS
+internal logs (LLM failures etc.) stay console-only — they surface here
+through the `failed` counter and the error lines the cron route records
+when a worker call fails.
 
 ## Web push (VAPID)
 

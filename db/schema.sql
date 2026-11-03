@@ -158,10 +158,18 @@ CREATE INDEX IF NOT EXISTS preferences_due_idx ON preferences (delivery_hour);
 --   auth_ok = true    -> the tick ran; detail is stamped afterwards with the
 --                        outcome ("processed=N succeeded=M failed=K",
 --                        "no users due (currentUtcHour=N)", or the error)
+--   logs (optional)    -> the tick's log lines, mirrored from console output
+--                        only while the CRON_DB_LOGS feature flag is enabled
+--                        in the deployment env (see app/api/cron/route.ts)
 -- Purely diagnostic — safe to TRUNCATE; nothing reads it from app code.
 CREATE TABLE IF NOT EXISTS cron_runs (
   id         bigserial PRIMARY KEY,
   created_at timestamptz NOT NULL DEFAULT now(),
   auth_ok    boolean NOT NULL,
-  detail     text
+  detail     text,
+  logs       text
 );
+
+-- Existing databases: CREATE TABLE IF NOT EXISTS won't touch a table that
+-- already exists, so grow it with an idempotent ALTER instead.
+ALTER TABLE cron_runs ADD COLUMN IF NOT EXISTS logs text;
