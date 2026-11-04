@@ -20,7 +20,10 @@
  * For each due user we POST to /api/generate (the per-user worker that runs
  * the LLM, saves the report(s) and pushes). We call it over HTTP rather than
  * importing the handler so the worker's own maxDuration/timeout budget and
- * logs stay isolated per user.
+ * logs stay isolated per user. The POST targets the PRODUCTION ALIAS
+ * (VERCEL_PROJECT_PRODUCTION_URL), never the request's own host — inside a
+ * Vercel function that host is the deployment's unique URL, which Deployment
+ * Protection guards with Vercel Authentication even in production.
  *
  * Auth: Vercel Cron sends `Authorization: Bearer ${CRON_SECRET}`
  * automatically (when the env var is set on the deployment); anything else
@@ -187,9 +190,22 @@ export async function GET(request: Request): Promise<Response> {
     tickLogs.log("Number of users due: "+dueUsers.length+" for currentUtcHour "+currentUtcHour+".");
 
     if (dueUsers.length > 0) {
-      // Same-origin self-call: works on Vercel (the request's own host) and
-      // against `next dev` during local curl testing.
-      const origin = new URL(request.url).origin;
+      // Self-call to the /api/generate worker — via the PRODUCTION ALIAS, not
+      // the request's own host: inside a Vercel function, request.url carries
+      // the deployment's UNIQUE URL (e.g. panorist-abc123-you.vercel.app),
+      // which Deployment Protection guards with Vercel Authentication even
+      // in production — fetching it yields 401 "Protected deployment" (the
+      // SSO page) instead of invoking the worker. VERCEL_PROJECT_PRODUCTION_URL
+      // (injected automatically on Vercel) is the unprotected production
+      // alias; locally (next dev) it's absent and we fall back to the
+      // request's own origin, which is the dev server.
+      const productionDomain = process.env.VERCEL_PROJECT_PRODUCTION_URL?.replace(
+        /^https?:\/\//,
+        '',
+      );
+      const origin = productionDomain
+        ? `https://${productionDomain}`
+        : new URL(request.url).origin;
 
       let succeeded = 0;
       let failed = 0;

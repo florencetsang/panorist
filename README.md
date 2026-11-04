@@ -135,6 +135,18 @@ automatically, and anything else gets a 401. For each due user it POSTs to
 concurrency and per-user error isolation, then returns
 `{processed, succeeded, failed}`.
 
+**Self-call origin — Deployment Protection gotcha:** inside a Vercel function,
+`request.url` carries the deployment's *unique* URL (e.g.
+`panorist-abc123-you.vercel.app`), which Deployment Protection guards with
+Vercel Authentication even in production — a fetch to it returns 401
+`Protected deployment` (the SSO page) instead of invoking the worker. The
+cron route therefore POSTs to the production alias via the injected
+`VERCEL_PROJECT_PRODUCTION_URL` (unprotected), falling back to the request's
+own origin only for local `next dev` runs. Consequence: never enable "Only
+Vercel Authentication" for **all** deployments (Settings → Deployment
+Protection → scope "All Deployments") — that would lock the production alias
+too and the self-call would break again.
+
 ### Setting `CRON_SECRET` in Vercel
 
 1. Generate a secret, e.g. `openssl rand -base64 32`.
