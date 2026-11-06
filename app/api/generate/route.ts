@@ -102,6 +102,7 @@ async function generateAndStoreOne(
       // itself. One push per generated report, so the title names the
       // frequency and the deep link targets that report's page
       // (public/sw.js opens it on notificationclick).
+      console.log('Sending push notification to user ' + user.id);
       const pushResult = await sendPush(user.pushSubscription, {
         title: `Panorist — your ${frequency} briefing is ready`,
         body: draft.content.map((key) => key.category.replace(/_/g, ' ')).join(', '),
@@ -111,6 +112,7 @@ async function generateAndStoreOne(
         // Push service answered 404/410: that subscription is gone — null
         // it out so future cron ticks stop retrying a dead endpoint.
         // (Idempotent if a Monday's second report also finds it expired.)
+        console.log('Push result is expired for user ' + user.id);
         await updatePreferences(user.id, { pushSubscription: null });
       }
     } catch (err) {
