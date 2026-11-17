@@ -13,7 +13,7 @@ import { isUuid } from './validation.ts';
  * user. NEXT_PUBLIC_* vars are inlined into the client bundle at build time.
  */
 export const TEST_USER_ID: string =
-  process.env.NEXT_PUBLIC_TEST_USER_ID ?? 'b19d6a47-bc86-43da-b963-88da91383ea8';
+  process.env.NEXT_PUBLIC_TEST_USER_ID || 'b19d6a47-bc86-43da-b963-88da91383ea8';
 
 /** Resolve the current user from Next-style search params (string | string[] per key). */
 export function getUserIdFrom(
