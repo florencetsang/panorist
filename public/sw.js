@@ -4,10 +4,10 @@
  * Deliberately framework-free vanilla JS: it's served straight from /sw.js
  * (scope: the whole origin) and must run without any app bundle. Web push
  * requires a secure context — HTTPS on Vercel; browsers exempt localhost so
- * `npm run dev` works without a local cert (see lib/push-client.ts).
+ * `npm run dev` works without a local cert (see lib/client/push.ts).
  */
 
-// Payload contract (lib/push.ts): {title, body, url} — tiny on purpose,
+// Payload contract (lib/server/push.ts): {title, body, url} — tiny on purpose,
 // since push services cap encrypted payloads near 4KB.
 self.addEventListener('push', (event) => {
   let data = {};

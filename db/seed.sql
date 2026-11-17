@@ -1,18 +1,13 @@
--- Idempotent seed (upserts): one test user, delivery 08:00 Asia/Hong_Kong.
--- Per-frequency lists: DAILY = world + economics, WEEKLY = hong_kong (see
--- db/schema.sql — a category may sit in either list, both, or neither).
+-- Development seed: one test user (08:00 Asia/Hong_Kong). Insert-only, so
+-- re-running never overwrites edited preferences. The id matches the
+-- TEST_USER_ID fallback in lib/shared/user-id.ts.
 WITH u AS (
-  INSERT INTO users (email, timezone)
-  VALUES ('test@example.com', 'Asia/Hong_Kong')
-  ON CONFLICT (email) DO UPDATE SET timezone = EXCLUDED.timezone
+  INSERT INTO users (id, email, timezone)
+  VALUES ('b19d6a47-bc86-43da-b963-88da91383ea8', 'test@example.com', 'Asia/Hong_Kong')
+  ON CONFLICT (email) DO UPDATE SET email = EXCLUDED.email
   RETURNING id
 )
-INSERT INTO preferences (user_id, delivery_hour, daily_categories, weekly_categories, push_subscription)
-SELECT u.id, 8, ARRAY['world', 'economics'], ARRAY['hong_kong'], NULL
+INSERT INTO preferences (user_id, delivery_hour, daily_categories, weekly_categories)
+SELECT u.id, 8, ARRAY['world', 'economics'], ARRAY['hong_kong']
 FROM u
-ON CONFLICT (user_id) DO UPDATE SET
-  delivery_hour     = EXCLUDED.delivery_hour,
-  daily_categories  = EXCLUDED.daily_categories,
-  weekly_categories = EXCLUDED.weekly_categories,
-  push_subscription = EXCLUDED.push_subscription,
-  updated_at        = now();
+ON CONFLICT (user_id) DO NOTHING;

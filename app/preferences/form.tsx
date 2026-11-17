@@ -1,26 +1,30 @@
 'use client';
 
 /**
- * Preferences editor: TWO per-frequency category lists — which categories go
- * into the DAILY report and which into the WEEKLY (local Monday) one — plus
- * the single global delivery hour. A category may be checked in both, one,
- * or neither group. Loads GET /api/preferences, saves via PATCH (same route)
- * — the form always sends all three fields, so the server row and the UI
- * can't drift.
+ * Preferences editor: independent daily and weekly (local Monday) category
+ * lists plus one delivery hour. Saving always sends all three fields and
+ * re-applies the stored row, so the UI mirrors the server exactly.
  */
 
 import { useEffect, useState } from 'react';
-import {
-  CATEGORY_LABELS,
-  CATEGORY_SLUGS,
-  type CategorySlug,
-  type UserWithPreferencesWire,
-} from '../../lib/types.ts';
+import { ErrorAlert } from '../../components/alert.tsx';
+import { CategoryGrid } from '../../components/category-grid.tsx';
+import { ApiError, api } from '../../lib/client/api.ts';
+import type { CategorySlug } from '../../lib/shared/categories.ts';
+import type { UserWithPreferencesWire } from '../../lib/shared/types.ts';
+import { MISSING_USER_MESSAGE } from '../../lib/shared/user-id.ts';
+import { isDeliveryHour } from '../../lib/shared/validation.ts';
+
+interface Draft {
+  dailyCategories: ReadonlySet<CategorySlug>;
+  weeklyCategories: ReadonlySet<CategorySlug>;
+  deliveryHour: number;
+}
 
 type LoadState =
   | { status: 'loading' }
   | { status: 'error'; message: string }
-  | { status: 'ready' };
+  | { status: 'ready'; timezone: string };
 
 type SaveState =
   | { status: 'idle' }
@@ -28,115 +32,79 @@ type SaveState =
   | { status: 'saved' }
   | { status: 'error'; message: string };
 
-/** One category-checkbox grid, shared by the daily and weekly groups. */
-function CategoryGrid({
-  selected,
-  onToggle,
-}: {
-  selected: Set<CategorySlug>;
-  onToggle: (slug: CategorySlug) => void;
-}) {
-  return (
-    <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
-      {CATEGORY_SLUGS.map((slug) => (
-        <label
-          key={slug}
-          className="flex cursor-pointer items-center gap-2.5 rounded-lg border border-stone-200 bg-white px-3 py-2.5 text-sm transition-colors has-[:checked]:border-indigo-300 has-[:checked]:bg-indigo-50/60"
-        >
-          <input
-            type="checkbox"
-            checked={selected.has(slug)}
-            onChange={() => onToggle(slug)}
-            className="h-4 w-4 accent-indigo-600"
-          />
-          {CATEGORY_LABELS[slug]}
-        </label>
-      ))}
-    </div>
-  );
+const toDraft = (prefs: UserWithPreferencesWire): Draft => ({
+  dailyCategories: new Set(prefs.dailyCategories),
+  weeklyCategories: new Set(prefs.weeklyCategories),
+  deliveryHour: prefs.deliveryHour,
+});
+
+function toggled<T>(set: ReadonlySet<T>, value: T): Set<T> {
+  const next = new Set(set);
+  if (next.has(value)) next.delete(value);
+  else next.add(value);
+  return next;
 }
 
 export default function PreferencesForm({ userId }: { userId: string | null }) {
+  // key: a new user remounts with fresh 'loading' state.
+  return userId ? (
+    <Editor key={userId} userId={userId} />
+  ) : (
+    <ErrorAlert message={MISSING_USER_MESSAGE} />
+  );
+}
+
+function Editor({ userId }: { userId: string }) {
   const [load, setLoad] = useState<LoadState>({ status: 'loading' });
   const [save, setSave] = useState<SaveState>({ status: 'idle' });
+  const [draft, setDraft] = useState<Draft>({
+    dailyCategories: new Set(),
+    weeklyCategories: new Set(),
+    deliveryHour: 8,
+  });
 
-  const [dailyCategories, setDailyCategories] = useState<Set<CategorySlug>>(new Set());
-  const [weeklyCategories, setWeeklyCategories] = useState<Set<CategorySlug>>(new Set());
-  const [deliveryHour, setDeliveryHour] = useState(8);
-  const [timezone, setTimezone] = useState(''); // shown next to the hour field
-
-  // Load current preferences. 404 → the id isn't in the db (seed it first).
   useEffect(() => {
-    if (!userId) {
-      setLoad({ status: 'error', message: 'No user id — add ?userId=<uuid> or set NEXT_PUBLIC_TEST_USER_ID.' });
-      return;
-    }
     let cancelled = false;
-    (async () => {
-      try {
-        const res = await fetch(`/api/preferences?userId=${encodeURIComponent(userId)}`);
-        if (res.status === 404) throw new Error('unknown user');
-        if (!res.ok) throw new Error(`GET /api/preferences answered ${res.status}`);
-        const prefs = (await res.json()) as UserWithPreferencesWire;
+    api.getPreferences(userId).then(
+      (prefs) => {
         if (cancelled) return;
-        setDailyCategories(new Set(prefs.dailyCategories));
-        setWeeklyCategories(new Set(prefs.weeklyCategories));
-        setDeliveryHour(prefs.deliveryHour);
-        setTimezone(prefs.timezone);
-        setLoad({ status: 'ready' });
-      } catch (err) {
+        setDraft(toDraft(prefs));
+        setLoad({ status: 'ready', timezone: prefs.timezone });
+      },
+      (err) => {
         if (cancelled) return;
         const message =
-          err instanceof Error && err.message === 'unknown user'
+          err instanceof ApiError && err.status === 404
             ? 'Unknown user id — run `npm run db:setup` (or check ?userId=).'
             : 'Could not load preferences — is the database up?';
         setLoad({ status: 'error', message });
-      }
-    })();
+      },
+    );
     return () => {
       cancelled = true;
     };
   }, [userId]);
 
-  // Any edit clears the "Saved" confirmation until the next save.
-  const edited = () => setSave({ status: 'idle' });
-
-  function toggleIn(set: Set<CategorySlug>, slug: CategorySlug): Set<CategorySlug> {
-    const next = new Set(set);
-    if (next.has(slug)) next.delete(slug);
-    else next.add(slug);
-    return next;
+  function edit(patch: Partial<Draft>) {
+    setDraft((prev) => ({ ...prev, ...patch }));
+    setSave({ status: 'idle' }); // any edit clears "Saved ✓"
   }
 
-  // Both lists empty is the valid "paused" state (no reports generated), so
-  // the only hard requirement is a sane delivery hour.
-  const hourValid = Number.isInteger(deliveryHour) && deliveryHour >= 0 && deliveryHour <= 23;
-  const paused = dailyCategories.size === 0 && weeklyCategories.size === 0;
+  // Both lists empty is the valid "paused" state.
+  const hourValid = isDeliveryHour(draft.deliveryHour);
+  const paused = draft.dailyCategories.size === 0 && draft.weeklyCategories.size === 0;
   const canSave = load.status === 'ready' && hourValid && save.status !== 'saving';
 
   async function onSave() {
-    if (!userId || !canSave) return;
+    if (!canSave) return;
     setSave({ status: 'saving' });
     try {
-      const res = await fetch('/api/preferences', {
-        method: 'PATCH',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          userId,
-          patch: {
-            deliveryHour,
-            dailyCategories: [...dailyCategories],
-            weeklyCategories: [...weeklyCategories],
-          },
-        }),
+      const prefs = await api.updatePreferences(userId, {
+        deliveryHour: draft.deliveryHour,
+        dailyCategories: [...draft.dailyCategories],
+        weeklyCategories: [...draft.weeklyCategories],
       });
-      if (!res.ok) throw new Error(`PATCH /api/preferences answered ${res.status}`);
-      // The response is the stored row — re-apply it so the UI mirrors the
-      // server exactly (fresh updated_at too).
-      const prefs = (await res.json()) as UserWithPreferencesWire;
-      setDailyCategories(new Set(prefs.dailyCategories));
-      setWeeklyCategories(new Set(prefs.weeklyCategories));
-      setDeliveryHour(prefs.deliveryHour);
+      setDraft(toDraft(prefs));
       setSave({ status: 'saved' });
     } catch (err) {
       console.error('[preferences] save failed', err);
@@ -153,12 +121,7 @@ export default function PreferencesForm({ userId }: { userId: string | null }) {
       </div>
     );
   }
-
-  if (load.status === 'error') {
-    return (
-      <p className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700">{load.message}</p>
-    );
-  }
+  if (load.status === 'error') return <ErrorAlert message={load.message} />;
 
   return (
     <section>
@@ -167,34 +130,28 @@ export default function PreferencesForm({ userId }: { userId: string | null }) {
         Pick which categories go into your daily and weekly (Mondays) reports.
       </p>
 
-      {/* Daily report — the fixed prototype vocabulary (mirrors the DB CHECK) */}
       <fieldset className="mt-6">
         <legend className="text-sm font-medium text-stone-900">Daily report — categories</legend>
         <CategoryGrid
-          selected={dailyCategories}
-          onToggle={(slug) => {
-            setDailyCategories((set) => toggleIn(set, slug));
-            edited();
-          }}
+          selected={draft.dailyCategories}
+          onToggle={(slug) => edit({ dailyCategories: toggled(draft.dailyCategories, slug) })}
         />
-        {dailyCategories.size === 0 && (
+        {draft.dailyCategories.size === 0 && (
           <p className="mt-2 text-xs text-stone-500">
             No daily report — leave this empty if you only want a weekly one.
           </p>
         )}
       </fieldset>
 
-      {/* Weekly report — same grid, independent selection */}
       <fieldset className="mt-6">
-        <legend className="text-sm font-medium text-stone-900">Weekly report (Mondays) — categories</legend>
+        <legend className="text-sm font-medium text-stone-900">
+          Weekly report (Mondays) — categories
+        </legend>
         <CategoryGrid
-          selected={weeklyCategories}
-          onToggle={(slug) => {
-            setWeeklyCategories((set) => toggleIn(set, slug));
-            edited();
-          }}
+          selected={draft.weeklyCategories}
+          onToggle={(slug) => edit({ weeklyCategories: toggled(draft.weeklyCategories, slug) })}
         />
-        {weeklyCategories.size === 0 && (
+        {draft.weeklyCategories.size === 0 && (
           <p className="mt-2 text-xs text-stone-500">
             No weekly report — leave this empty if you only want a daily one.
           </p>
@@ -203,14 +160,12 @@ export default function PreferencesForm({ userId }: { userId: string | null }) {
 
       {paused && (
         <p className="mt-4 text-xs text-stone-500">
-          Both lists are empty — you are paused: no reports will be generated
-          until you pick at least one category.
+          Both lists are empty — you are paused: no reports will be generated until you pick at
+          least one category.
         </p>
       )}
 
-      {/* Delivery hour — local wall-clock hour in the user's timezone (the
-          cron route lets Postgres do the tz math; see lib/db.ts). One global
-          time per user: on a Monday both reports arrive at this hour. */}
+      {/* One local wall-clock hour per user; on Mondays both reports arrive then. */}
       <fieldset className="mt-6">
         <legend className="text-sm font-medium text-stone-900">Delivery hour</legend>
         <div className="mt-3 flex items-center gap-3">
@@ -218,21 +173,17 @@ export default function PreferencesForm({ userId }: { userId: string | null }) {
             type="number"
             min={0}
             max={23}
-            value={deliveryHour}
-            onChange={(e) => {
-              setDeliveryHour(Number(e.target.value));
-              edited();
-            }}
+            value={draft.deliveryHour}
+            onChange={(e) => edit({ deliveryHour: Number(e.target.value) })}
             className="w-20 rounded-lg border border-stone-200 bg-white px-3 py-2 text-sm invalid:border-red-300"
           />
           <span className="text-xs text-stone-500">
-            Local hour (0–23){timezone && ` in ${timezone}`}
+            Local hour (0–23){load.timezone && ` in ${load.timezone}`}
           </span>
         </div>
         {!hourValid && <p className="mt-2 text-xs text-red-600">Hour must be an integer 0–23.</p>}
       </fieldset>
 
-      {/* Save + confirmation */}
       <div className="mt-8 flex flex-wrap items-center gap-3">
         <button
           type="button"
