@@ -52,6 +52,10 @@ node --env-file=.env.local --conditions react-server scripts/llm-live.ts hong_ko
 (`--conditions react-server` makes the `server-only` marker importable
 outside Next.js.)
 
+To exercise the HTTP API by hand, import
+`postman/panorist.postman_collection.json` into Postman and set the
+`baseUrl`, `userId` and `cronSecret` collection variables.
+
 CI (`.github/workflows/ci.yml`) runs format check, lint, typecheck, tests and
 build on every push and pull request.
 
