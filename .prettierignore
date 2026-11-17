@@ -1,0 +1,6 @@
+.next
+node_modules
+.agents
+package-lock.json
+skills-lock.json
+*.md

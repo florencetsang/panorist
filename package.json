@@ -1,19 +1,25 @@
 {
   "type": "module",
   "scripts": {
-    "db:setup": "node scripts/db-setup.mjs",
-    "vapid:generate": "web-push generate-vapid-keys",
-    "typecheck": "tsc --noEmit",
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "typecheck": "next typegen && node node_modules/typescript-native/bin/tsc --noEmit",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "db:setup": "node scripts/db-setup.mjs",
+    "vapid:generate": "web-push generate-vapid-keys"
   },
   "dependencies": {
     "@neon/config": "^1.8.3",
     "@neon/env": "^1.4.8",
     "@neondatabase/serverless": "^1.2.0",
     "next": "^16.4.0",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
     "server-only": "^0.0.1",
     "web-push": "^3.6.7"
   },
@@ -21,8 +27,14 @@
     "@tailwindcss/postcss": "^4.3.3",
     "@types/node": "^26.6.4",
     "@types/react": "19.3.0",
+    "@types/react-dom": "^19.3.0",
     "@types/web-push": "^3.6.4",
+    "eslint": "^9.39.5",
+    "eslint-config-next": "^16.4.0",
+    "prettier": "^3.10.1",
     "tailwindcss": "^4.3.3",
-    "typescript": "^7.0.2"
+    "typescript": "npm:@typescript/typescript6@^6.0.2",
+    "vitest": "^5.1.0",
+    "typescript-native": "npm:typescript@^7.0.2"
   }
 }
