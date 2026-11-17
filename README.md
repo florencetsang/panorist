@@ -39,6 +39,7 @@ Requires Node 24+ (scripts are TypeScript run directly by Node).
 | `npm run db:migrate` | Apply pending `db/migrations/*.sql` |
 | `npm run db:setup` | `db:migrate` + `db/seed.sql` |
 | `npm run vapid:generate` | New VAPID keypair for web push |
+| `npm run icons:generate` | Regenerate favicon and app icons from `scripts/generate-icons.ts` |
 
 Manual checks against real services (both need `.env.local`):
 
@@ -188,6 +189,7 @@ db/migrations/          numbered schema migrations · db/seed.sql
 scripts/                migrate.ts, smoke.ts, llm-live.ts
 test/                   Vitest unit tests
 public/sw.js            service worker (push → notification → open app)
+public/icons/           manifest + notification icons (generated; app/icon.svg, favicon.ico, apple-icon.png too)
 ```
 
 ## Known limitations
