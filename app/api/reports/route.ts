@@ -1,39 +1,26 @@
 /**
- * GET /api/reports?userId=<uuid>
- *
- * A user's recent reports, newest first. Prototype: userId is a plain query
- * param (no auth) — the goal is validating demand, and every route stays
- * read-only until the cron secret matters.
+ * GET /api/reports?userId=<uuid>[&hydrate=1] — a user's recent reports,
+ * newest first. With hydrate=1 each report also carries `topics`: its
+ * cache pointers resolved into renderable {category, markdown} sections.
  */
 
-import { getReportMarkdown, getReportsForUser } from '../../../lib/db.ts';
-import { isUuid, jsonError } from '../_lib/validate.ts';
+import { getHydratedReportsForUser, getReportsForUser } from '../../../lib/server/db/reports.ts';
+import { jsonError } from '../../../lib/server/http.ts';
+import { isUuid } from '../../../lib/shared/validation.ts';
 
-// GET reads live report rows per request (userId query param) — never
-// cache or statically prerender one user's data.
 export const dynamic = 'force-dynamic';
 
 export async function GET(request: Request): Promise<Response> {
-  const userId = new URL(request.url).searchParams.get('userId');
+  const params = new URL(request.url).searchParams;
+  const userId = params.get('userId');
   if (!isUuid(userId)) return jsonError(400, 'userId (uuid) query parameter is required');
 
   try {
-    // `content` is an array of markdown-cache pointers ({category, frequency,
-    // to}); the report body itself lives in markdown_cache. Default: rows
-    // exactly as stored. `hydrate=1` (the frontend's mode) resolves each
-    // report's pointers into renderable {category, markdown} topics.
-    const reports = await getReportsForUser(userId);
-    if (new URL(request.url).searchParams.get('hydrate') !== '1') return Response.json(reports);
-    // One Neon HTTPS query per (report × category) — ≤20 reports × a few
-    // categories per request, run in parallel. Fine at prototype scale;
-    // batch it if a list view ever gets hot.
-    const hydrated = await Promise.all(
-      reports.map(async (report) => ({
-        ...report,
-        topics: await getReportMarkdown(report.content),
-      })),
-    );
-    return Response.json(hydrated);
+    const reports =
+      params.get('hydrate') === '1'
+        ? await getHydratedReportsForUser(userId)
+        : await getReportsForUser(userId);
+    return Response.json(reports);
   } catch (err) {
     console.error('[api/reports] GET failed', err);
     return jsonError(500, 'internal error');
