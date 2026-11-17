@@ -1,22 +1,20 @@
 'use client';
 
 /**
- * Shared header: brand, section links, and the "Enable notifications"
- * button. Client-side because it reads the URL (to keep ?userId across
- * links) and drives web-push permission state.
+ * Shared header: brand, section links, and the notifications button.
+ * Client-side because it keeps ?userId across links and drives web push.
  */
 
 import Link from 'next/link';
 import { usePathname, useSearchParams } from 'next/navigation';
 import { useEffect, useState } from 'react';
-import { getUserIdFrom } from '../lib/user-id.ts';
-import { registerServiceWorker, subscribeUser } from '../lib/push-client.ts';
+import { hasPushSubscription, isPushSupported, subscribeUser } from '../lib/client/push.ts';
+import { getUserIdFrom } from '../lib/shared/user-id.ts';
 
-/** What the push button shows — mirrors Notification.permission + results. */
 type PushState = 'mount' | 'idle' | 'busy' | 'on' | 'denied' | 'unsupported' | 'error';
 
 const PUSH_LABEL: Record<PushState, string> = {
-  mount: 'Enable notifications', // SSR/first paint (matches 'idle' — no flash)
+  mount: 'Enable notifications', // matches 'idle' so first paint doesn't flash
   idle: 'Enable notifications',
   busy: 'Enabling…',
   on: 'Notifications on ✓',
@@ -25,40 +23,53 @@ const PUSH_LABEL: Record<PushState, string> = {
   error: 'Enable notifications',
 };
 
+const PUSH_TONE: Record<PushState, string> = {
+  mount: 'border-stone-300 bg-white text-stone-700 hover:bg-stone-100',
+  idle: 'border-stone-300 bg-white text-stone-700 hover:bg-stone-100',
+  error: 'border-stone-300 bg-white text-stone-700 hover:bg-stone-100',
+  busy: 'border-stone-200 bg-white text-stone-400',
+  on: 'border-emerald-200 bg-emerald-50 text-emerald-800',
+  denied: 'border-stone-200 bg-stone-100 text-stone-400',
+  unsupported: 'border-stone-200 bg-stone-100 text-stone-400',
+};
+
+/** Permission alone isn't enough for "on" — the browser must hold a subscription. */
+async function detectPushState(): Promise<PushState> {
+  if (!isPushSupported()) return 'unsupported';
+  if (Notification.permission === 'denied') return 'denied';
+  return (await hasPushSubscription()) ? 'on' : 'idle';
+}
+
 export default function Nav() {
   const pathname = usePathname();
   const search = useSearchParams();
-  // Brand/section links carry ?userId along, so the prototype's fake identity
-  // survives navigation. TODO(auth): dies with real auth.
+  // Carry ?userId across links so the prototype's fake identity survives
+  // navigation. TODO(auth): remove with real auth.
   const qs = search.toString();
   const withQs = (path: string) => (qs ? `${path}?${qs}` : path);
   const userId = getUserIdFrom(Object.fromEntries(search.entries()));
   const [push, setPush] = useState<PushState>('mount');
 
-  // Reflect the browser's current permission on load (before any click).
   useEffect(() => {
-    if (typeof Notification === 'undefined') setPush('unsupported');
-    else if (Notification.permission === 'granted') setPush('on');
-    else if (Notification.permission === 'denied') setPush('denied');
-    else setPush('idle');
+    let cancelled = false;
+    detectPushState().then(
+      (state) => !cancelled && setPush(state),
+      () => !cancelled && setPush('idle'),
+    );
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
+  const pushDisabled = !userId || push === 'busy' || push === 'denied' || push === 'unsupported';
+
   async function enableNotifications() {
-    if (!userId || push === 'busy' || push === 'denied' || push === 'unsupported') return;
+    if (pushDisabled || !userId) return;
     setPush('busy');
-    // register + subscribe (idempotent: re-registering a worker and re-POSTing
-    // a live subscription are both no-ops — see lib/push-client.ts).
-    await registerServiceWorker();
     const result = await subscribeUser(userId);
-    setPush(
-      result.ok
-        ? 'on'
-        : result.reason === 'denied'
-          ? 'denied'
-          : result.reason === 'unsupported'
-            ? 'unsupported'
-            : 'error',
-    );
+    if (result.ok) setPush('on');
+    else if (result.reason === 'denied' || result.reason === 'unsupported') setPush(result.reason);
+    else setPush('error');
   }
 
   const link = (path: string, label: string) => (
@@ -75,15 +86,6 @@ export default function Nav() {
     </Link>
   );
 
-  const pushTone =
-    push === 'on'
-      ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
-      : push === 'denied' || push === 'unsupported'
-        ? 'border-stone-200 bg-stone-100 text-stone-400'
-        : push === 'busy'
-          ? 'border-stone-200 bg-white text-stone-400'
-          : 'border-stone-300 bg-white text-stone-700 hover:bg-stone-100';
-
   return (
     <header className="border-b border-stone-200 py-4">
       <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
@@ -96,8 +98,8 @@ export default function Nav() {
           <button
             type="button"
             onClick={enableNotifications}
-            disabled={!userId || push === 'busy' || push === 'denied' || push === 'unsupported'}
-            className={`rounded-lg border px-3 py-1.5 text-sm font-medium transition-colors disabled:cursor-not-allowed ${pushTone}`}
+            disabled={pushDisabled}
+            className={`rounded-lg border px-3 py-1.5 text-sm font-medium transition-colors disabled:cursor-not-allowed ${PUSH_TONE[push]}`}
           >
             {PUSH_LABEL[push]}
           </button>
