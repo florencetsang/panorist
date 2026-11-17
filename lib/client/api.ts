@@ -7,6 +7,7 @@ import type {
   HydratedReportWire,
   PreferencesPatch,
   PushSubscriptionJSON,
+  ReportReadStatusWire,
   UserWithPreferencesWire,
 } from '../shared/types.ts';
 
@@ -37,6 +38,9 @@ const withUser = (path: string, userId: string, extra = '') =>
 export const api = {
   getReports: (userId: string) =>
     request<HydratedReportWire[]>('GET', withUser('/api/reports', userId, '&hydrate=1')),
+
+  setReportRead: (userId: string, reportId: string, read: boolean) =>
+    request<ReportReadStatusWire>('PATCH', '/api/reports', { userId, reportId, read }),
 
   getPreferences: (userId: string) =>
     request<UserWithPreferencesWire>('GET', withUser('/api/preferences', userId)),

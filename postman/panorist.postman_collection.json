@@ -16,6 +16,10 @@
     {
       "key": "cronSecret",
       "value": ""
+    },
+    {
+      "key": "reportId",
+      "value": ""
     }
   ],
   "item": [
@@ -180,7 +184,7 @@
                 }
               ]
             },
-            "description": "Recent reports, newest first. `content` holds cache pointers {category, frequency, to}."
+            "description": "Recent reports, newest first. `content` holds cache pointers {category, frequency, to}. `readAt` is null while unread. Saves the newest id as {{reportId}}."
           },
           "event": [
             {
@@ -189,7 +193,8 @@
                 "type": "text/javascript",
                 "exec": [
                   "pm.test('status is 200', () => pm.expect(pm.response.code).to.be.oneOf([200]));",
-                  "pm.test('is an array', () => pm.expect(pm.response.json()).to.be.an('array'));"
+                  "pm.test('is an array', () => pm.expect(pm.response.json()).to.be.an('array'));",
+                  "const first = pm.response.json()[0]; if (first) pm.collectionVariables.set('reportId', first.id);"
                 ]
               }
             }
@@ -224,6 +229,82 @@
                 "type": "text/javascript",
                 "exec": [
                   "pm.test('status is 200', () => pm.expect(pm.response.code).to.be.oneOf([200]));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Mark report read",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/reports",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "reports"]
+            },
+            "description": "Set read status (read: true/false); returns {id, readAt}. Marking read keeps the first readAt. Run \"List reports\" first to fill {{reportId}}. 404 if the report isn't the user's.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"userId\": \"{{userId}}\",\n  \"reportId\": \"{{reportId}}\",\n  \"read\": true\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200', () => pm.expect(pm.response.code).to.be.oneOf([200]));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Mark report read — bad reportId (400)",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/reports",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "reports"]
+            },
+            "description": "Negative case: reportId must be a numeric string.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"userId\": \"{{userId}}\",\n  \"reportId\": \"abc\",\n  \"read\": true\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 400', () => pm.expect(pm.response.code).to.be.oneOf([400]));"
                 ]
               }
             }

@@ -2,7 +2,7 @@
 
 /** Past briefings, newest first (the API orders them). */
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { ErrorAlert } from '../components/alert.tsx';
 import { ReportCard } from '../components/report-card.tsx';
 import { api } from '../lib/client/api.ts';
@@ -15,9 +15,18 @@ type State =
   | { status: 'ready'; reports: HydratedReportWire[] };
 
 export default function ReportsList({ userId }: { userId: string | null }) {
+  // Owned by <Reports>; null until loaded (and while loading another user).
+  const [unread, setUnread] = useState<number | null>(null);
   return (
     <section>
-      <h1 className="text-xl font-semibold tracking-tight">Your briefings</h1>
+      <h1 className="flex items-baseline gap-3 text-xl font-semibold tracking-tight">
+        Your briefings
+        {unread !== null && unread > 0 && (
+          <span className="rounded-full bg-indigo-50 px-2 py-0.5 text-xs font-medium text-indigo-700">
+            {unread} unread
+          </span>
+        )}
+      </h1>
       <p className="mt-1 text-sm text-stone-500">
         Daily and weekly briefings arrive as separate reports — on Mondays you get one of each, one
         section per category you picked for it.
@@ -25,7 +34,7 @@ export default function ReportsList({ userId }: { userId: string | null }) {
       <div className="mt-6">
         {userId ? (
           // key: a new user remounts with fresh 'loading' state.
-          <Reports key={userId} userId={userId} />
+          <Reports key={userId} userId={userId} onUnreadChange={setUnread} />
         ) : (
           <ErrorAlert message={MISSING_USER_MESSAGE} />
         )}
@@ -34,8 +43,50 @@ export default function ReportsList({ userId }: { userId: string | null }) {
   );
 }
 
-function Reports({ userId }: { userId: string }) {
+function Reports({
+  userId,
+  onUnreadChange,
+}: {
+  userId: string;
+  onUnreadChange: (count: number | null) => void;
+}) {
   const [state, setState] = useState<State>({ status: 'loading' });
+  // Latest request per report, so a stale response can't undo a newer toggle.
+  const readSeq = useRef(new Map<string, number>());
+
+  const unread =
+    state.status === 'ready' ? state.reports.filter((r) => r.readAt === null).length : null;
+  useEffect(() => {
+    onUnreadChange(unread);
+  }, [unread, onUnreadChange]);
+  useEffect(() => () => onUnreadChange(null), [onUnreadChange]);
+
+  function setReadAt(reportId: string, readAt: string | null) {
+    setState((prev) =>
+      prev.status === 'ready'
+        ? {
+            ...prev,
+            reports: prev.reports.map((r) => (r.id === reportId ? { ...r, readAt } : r)),
+          }
+        : prev,
+    );
+  }
+
+  /** Optimistic: update locally, then persist; roll back if the request fails. */
+  function changeRead(report: HydratedReportWire, read: boolean) {
+    if ((report.readAt !== null) === read) return;
+    const previous = report.readAt;
+    const seq = (readSeq.current.get(report.id) ?? 0) + 1;
+    readSeq.current.set(report.id, seq);
+    setReadAt(report.id, read ? new Date().toISOString() : null);
+    api.setReportRead(userId, report.id, read).then(
+      (status) => readSeq.current.get(report.id) === seq && setReadAt(report.id, status.readAt),
+      (err) => {
+        console.error('[reports-list] read update failed', err);
+        if (readSeq.current.get(report.id) === seq) setReadAt(report.id, previous);
+      },
+    );
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -58,9 +109,13 @@ function Reports({ userId }: { userId: string }) {
   if (state.reports.length === 0) return <EmptyState />;
   return (
     <div className="space-y-6">
-      {state.reports.map((report, index) => (
-        // Newest starts expanded so the page isn't a wall of collapsed cards.
-        <ReportCard key={report.id} report={report} defaultOpen={index === 0} />
+      {state.reports.map((report) => (
+        // All start collapsed: opening a report is what marks it read.
+        <ReportCard
+          key={report.id}
+          report={report}
+          onReadChange={(read) => changeRead(report, read)}
+        />
       ))}
     </div>
   );

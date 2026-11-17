@@ -14,6 +14,7 @@ import {
   getHydratedReportsForUser,
   getReportsForUser,
   saveReport,
+  setReportRead,
 } from '../lib/server/db/reports.ts';
 import {
   getUsersDueForReport,
@@ -133,6 +134,19 @@ async function main() {
     }
     const hydrated = (await getHydratedReportsForUser(userId, 50)).find((r) => r.id === first.id);
     assert.deepEqual(hydrated?.topics, [{ category: 'hong_kong', markdown: MARKDOWN }]);
+
+    // setReportRead: new reports are unread; read keeps the first read_at; unread clears it.
+    assert.equal(mine.readAt, null, 'new report must start unread');
+    const read = await setReportRead(userId, first.id, true);
+    assert.ok(read?.readAt instanceof Date);
+    const reread = await setReportRead(userId, first.id, true);
+    assert.equal(reread?.readAt?.getTime(), read.readAt.getTime(), 're-read must keep read_at');
+    assert.deepEqual(await setReportRead(userId, first.id, false), { id: first.id, readAt: null });
+    assert.equal(
+      await setReportRead('00000000-0000-0000-0000-000000000000', first.id, true),
+      null,
+      "another user's report must not be found",
+    );
 
     console.log('smoke: all db helpers OK');
   } finally {

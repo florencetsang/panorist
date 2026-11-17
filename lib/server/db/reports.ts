@@ -2,13 +2,13 @@
 
 import 'server-only';
 
-import type { HydratedReport, Report, ReportDraft } from '../../shared/types.ts';
+import type { HydratedReport, Report, ReportDraft, ReportReadStatus } from '../../shared/types.ts';
 import { db } from './client.ts';
 
 const REPORT_COLUMNS = `
   r.id, r.user_id AS "userId", r.kind, r.frequency,
   r.period_start AS "periodStart", r.period_end AS "periodEnd",
-  r.content, r.created_at AS "createdAt"
+  r.content, r.created_at AS "createdAt", r.read_at AS "readAt"
 `;
 
 export interface SaveReportResult {
@@ -82,4 +82,22 @@ export async function getHydratedReportsForUser(
     LIMIT ${limit}
   `;
   return rows as HydratedReport[];
+}
+
+/**
+ * Mark one of the user's reports read or unread. Marking read keeps the first
+ * `read_at`, so re-opening doesn't bump it. Null when the user has no such report.
+ */
+export async function setReportRead(
+  userId: string,
+  reportId: string,
+  read: boolean,
+): Promise<ReportReadStatus | null> {
+  const rows = await db()`
+    UPDATE reports
+    SET read_at = CASE WHEN ${read}::boolean THEN COALESCE(read_at, now()) ELSE NULL END
+    WHERE id = ${reportId}::bigint AND user_id = ${userId}
+    RETURNING id, read_at AS "readAt"
+  `;
+  return (rows[0] as ReportReadStatus | undefined) ?? null;
 }

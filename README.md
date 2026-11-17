@@ -3,8 +3,8 @@
 Personalized news briefings. Each user picks categories for a **daily** report
 and, separately, a **weekly** (local Monday) report. At their chosen local
 hour a cron job asks a search-grounded LLM for the news in each category,
-stores the report, and sends a web push. The frontend lists past reports and
-edits preferences.
+stores the report, and sends a web push. The frontend lists past reports
+(with read/unread status) and edits preferences.
 
 Prototype goals: minimal code, near-zero fixed cost, scales to zero.
 
@@ -73,7 +73,7 @@ latter directly. Remove the alias once typescript-eslint supports TS 7.
 Schema changes are numbered SQL files in `db/migrations/`, applied in order by
 `scripts/migrate.ts`, each in a transaction, and recorded in
 `schema_migrations`. To change the schema, add the next file (e.g.
-`0003_add_read_status.sql`) — never edit an applied one. The runner prefers
+`0004_add_bookmarks.sql`) — never edit an applied one. The runner prefers
 `DATABASE_URL_UNPOOLED`, since DDL belongs on Neon's direct endpoint.
 
 Databases created by the old `db/schema.sql` are adopted automatically: if the
