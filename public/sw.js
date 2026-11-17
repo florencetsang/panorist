@@ -20,6 +20,9 @@ self.addEventListener('push', (event) => {
   event.waitUntil(
     self.registration.showNotification(data.title || 'Panorist', {
       body: data.body || 'Your briefing is ready',
+      icon: '/icons/icon-192.png',
+      // Monochrome silhouette for the Android status bar.
+      badge: '/icons/badge-96.png',
       // One tag per briefing: a newer push replaces the stale notification
       // instead of stacking duplicates in the tray.
       tag: 'panorist-briefing',

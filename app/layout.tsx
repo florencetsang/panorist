@@ -8,6 +8,8 @@ export const metadata = {
   description: 'Personalized news briefings, delivered on your schedule.',
 };
 
+export const viewport = { themeColor: '#1c1917' };
+
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
     <html lang="en">
