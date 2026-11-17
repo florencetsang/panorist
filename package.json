@@ -10,7 +10,8 @@
     "format:check": "prettier --check .",
     "test": "vitest run",
     "test:watch": "vitest",
-    "db:setup": "node scripts/db-setup.mjs",
+    "db:migrate": "node scripts/migrate.ts",
+    "db:setup": "node scripts/migrate.ts --seed",
     "vapid:generate": "web-push generate-vapid-keys"
   },
   "dependencies": {
