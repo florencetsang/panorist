@@ -81,6 +81,14 @@ export interface Report extends ReportDraft {
   id: string;
   userId: string;
   createdAt: Date;
+  /** When the user first opened it; null = unread. */
+  readAt: Date | null;
+}
+
+/** PATCH /api/reports result: the report's read status after the update. */
+export interface ReportReadStatus {
+  id: string;
+  readAt: Date | null;
 }
 
 export interface HydratedReport extends Report {
@@ -97,7 +105,10 @@ type Jsonified<T, K extends keyof T> = Omit<T, K> & { [P in K]: string };
 export type UserWithPreferencesWire = Jsonified<UserWithPreferences, 'createdAt' | 'updatedAt'>;
 
 /** GET /api/reports?hydrate=1 response item. */
-export type HydratedReportWire = Jsonified<
-  HydratedReport,
-  'periodStart' | 'periodEnd' | 'createdAt'
->;
+export type HydratedReportWire = Omit<
+  Jsonified<HydratedReport, 'periodStart' | 'periodEnd' | 'createdAt'>,
+  'readAt'
+> & { readAt: string | null };
+
+/** PATCH /api/reports response. */
+export type ReportReadStatusWire = Omit<ReportReadStatus, 'readAt'> & { readAt: string | null };

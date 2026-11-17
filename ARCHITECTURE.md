@@ -13,7 +13,7 @@ Vercel Cron ──► GET /api/cron ──(per due user, bounded pool)──► 
                                                                     ├─ save report (idempotent)
                                                                     └─ web push (only for a newly created report)
 
-Browser ──► /api/reports?hydrate=1, /api/preferences, /api/push/subscribe
+Browser ──► /api/reports?hydrate=1 (GET, PATCH read), /api/preferences, /api/push/subscribe
 ```
 
 ### Layers
@@ -125,7 +125,14 @@ server code fails the build.
 
 ## Data model
 
-See `db/migrations/0001_baseline.sql`.
+See `db/migrations/0001_baseline.sql` and later migrations.
+- **Read status** is `reports.read_at` (`0003`): null means unread.
+  - Reports belong to one user, so a column is enough; no join table.
+  - `PATCH /api/reports {userId, reportId, read}` sets or clears it, scoped
+    to the user (another user's id gets a 404).
+  - Marking read keeps the first `read_at`.
+  - The UI marks a report read when it is expanded. Cards start collapsed,
+    so a new report stays unread until opened.
 - Category slugs are enforced by CHECK constraints and must match
   `CATEGORY_SLUGS` (`lib/shared/categories.ts`). A unit test keeps the two in
   sync, so adding a category means a migration **and** a code change.
@@ -158,9 +165,6 @@ The current seams were chosen with the planned features in mind:
   - `generateReport` already takes a cache and a provider. Swapping "web
     search" for "summarize clustered articles" means changing what fills the
     cache, not the report shape.
-- **Read/unread.** Add a `report_reads (user_id, report_id, read_at)` table
-  or a `read_at` column. Hydration already returns per-report rows to attach
-  it to.
 - **Freemium.**
   - Add a `plan` column (or a `subscriptions` table).
   - Enforce limits (category count, delivery options) in

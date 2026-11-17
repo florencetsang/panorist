@@ -7,6 +7,7 @@ import {
   isCategoryList,
   isDeliveryHour,
   isPushSubscription,
+  isReportId,
   isUuid,
   parsePreferencesPatch,
 } from '../lib/shared/validation.ts';
@@ -24,6 +25,13 @@ describe('primitive validators', () => {
     expect(isUuid(UUID.toUpperCase())).toBe(true);
     expect(isUuid('not-a-uuid')).toBe(false);
     expect(isUuid(null)).toBe(false);
+  });
+
+  it('isReportId', () => {
+    expect(['1', '42', '9223372036854775807'].every(isReportId)).toBe(true);
+    expect(
+      ['0', '01', '-1', '1.5', '', ' 1', '9223372036854775808', 42, null].some(isReportId),
+    ).toBe(false);
   });
 
   it('isDeliveryHour', () => {

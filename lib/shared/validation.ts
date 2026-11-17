@@ -17,6 +17,15 @@ export function isPlainObject(value: unknown): value is Record<string, unknown> 
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
+const PG_BIGINT_MAX = 9223372036854775807n;
+
+/** A report id: a positive Postgres bigint as a decimal string (ids are strings end-to-end). */
+export function isReportId(value: unknown): value is string {
+  return (
+    typeof value === 'string' && /^[1-9]\d{0,18}$/.test(value) && BigInt(value) <= PG_BIGINT_MAX
+  );
+}
+
 /** Empty is allowed (mirrors the DB CHECK). */
 export function isCategoryList(value: unknown): value is CategorySlug[] {
   return Array.isArray(value) && value.every(isCategorySlug);

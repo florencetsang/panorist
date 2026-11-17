@@ -38,10 +38,14 @@ function useElementHeight<T extends HTMLElement>(active: boolean) {
 export function ReportCard({
   report,
   defaultOpen = false,
+  onReadChange,
 }: {
   report: HydratedReportWire;
   defaultOpen?: boolean;
+  /** Called with true when the report is opened while unread, and by the read toggle. */
+  onReadChange?: (read: boolean) => void;
 }) {
+  const isRead = report.readAt !== null;
   const period = periodLabel(report);
   const kindLabel = report.kind.charAt(0).toUpperCase() + report.kind.slice(1);
   // Empty markdown means the cache row is missing; skip rather than render a blank section.
@@ -50,10 +54,12 @@ export function ReportCard({
   const [reportOpen, setReportOpen] = useState(defaultOpen);
   const [openTopics, setOpenTopics] = useState<ReadonlySet<string>>(() => new Set());
   // The topic context line sticks just below the (sticky) report header.
-  const [headerRef, headerHeight] = useElementHeight<HTMLButtonElement>(reportOpen);
+  const [headerRef, headerHeight] = useElementHeight<HTMLDivElement>(reportOpen);
 
   function toggleReport() {
-    if (reportOpen) setOpenTopics(new Set()); // no hidden open state when collapsed
+    if (reportOpen)
+      setOpenTopics(new Set()); // no hidden open state when collapsed
+    else if (!isRead) onReadChange?.(true);
     setReportOpen(!reportOpen);
   }
 
@@ -72,29 +78,51 @@ export function ReportCard({
 
   return (
     <article className="rounded-xl border border-stone-200 bg-white shadow-sm">
-      <button
+      <div
         ref={headerRef}
-        type="button"
-        id={headerId}
-        aria-expanded={reportOpen}
-        aria-controls={bodyId}
-        onClick={toggleReport}
-        className={`flex w-full flex-wrap items-center justify-between gap-x-3 gap-y-1 px-5 py-4 text-left sm:px-6 ${
+        className={`flex items-center ${
           reportOpen
             ? 'sticky top-0 z-20 rounded-t-xl border-b border-stone-100 bg-white'
             : 'rounded-xl'
         }`}
       >
-        <time dateTime={report.createdAt} className="text-sm font-medium text-stone-900">
-          {dateTimeFmt.format(new Date(report.createdAt))}
-        </time>
-        <span className="flex items-center gap-2 text-xs text-stone-500">
-          <span>
-            {kindLabel} · {period}
+        <button
+          type="button"
+          id={headerId}
+          aria-expanded={reportOpen}
+          aria-controls={bodyId}
+          onClick={toggleReport}
+          className="flex min-w-0 flex-1 flex-wrap items-center justify-between gap-x-3 gap-y-1 rounded-xl py-4 pr-2 pl-5 text-left sm:pl-6"
+        >
+          <span className="flex items-center gap-2">
+            {!isRead && (
+              <span aria-hidden className="h-2 w-2 shrink-0 rounded-full bg-indigo-600" />
+            )}
+            <time
+              dateTime={report.createdAt}
+              className={`text-sm text-stone-900 ${isRead ? 'font-medium' : 'font-semibold'}`}
+            >
+              {dateTimeFmt.format(new Date(report.createdAt))}
+            </time>
+            {!isRead && <span className="sr-only">(unread)</span>}
           </span>
-          <Chevron open={reportOpen} />
-        </span>
-      </button>
+          <span className="flex items-center gap-2 text-xs text-stone-500">
+            <span>
+              {kindLabel} · {period}
+            </span>
+            <Chevron open={reportOpen} />
+          </span>
+        </button>
+        {onReadChange && (
+          <button
+            type="button"
+            onClick={() => onReadChange(!isRead)}
+            className="mr-3 shrink-0 rounded-md px-2 py-1 text-xs text-stone-500 hover:bg-stone-100 hover:text-stone-800 sm:mr-4"
+          >
+            {isRead ? 'Mark unread' : 'Mark read'}
+          </button>
+        )}
+      </div>
 
       {reportOpen && (
         <div
