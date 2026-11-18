@@ -1,7 +1,7 @@
 {
   "info": {
     "name": "Panorist API",
-    "description": "Every Panorist API route. Set the collection variables first:\n\n- `baseUrl`: e.g. http://localhost:3000 (`npm run dev`) or your Vercel production URL.\n- `userId`: a user uuid (default: the seeded test user from db/seed.sql).\n- `cronSecret`: the `CRON_SECRET` value; only the Cron and Generate requests need it.\n\nThere is no real auth yet: user routes take `userId` as a parameter.\n\nCaution: Generate and Cron call the LLM (costs money) and send real pushes. \"Store push subscription\" saves a FAKE subscription; run \"Clear push subscription\" afterwards.",
+    "description": "Every Panorist API route. Set the collection variables first:\n\n- `baseUrl`: e.g. http://localhost:3000 (`npm run dev`) or your Vercel production URL.\n- `email` / `password`: an existing, verified Panorist account (sign up in the web app first).\n- `cronSecret`: the `CRON_SECRET` value; only the Jobs requests need it.\n- `userId`: an app user uuid (`users.id`); only Generate needs it.\n\nAuth: user routes take the user from the session, never from input. Run **Auth → Sign in** (stores `sessionToken`), then **Auth → Get JWT** (stores `jwt`). Every other request sends `Authorization: Bearer {{jwt}}` (collection-level auth), the same way the mobile app does. The JWT lasts 15 minutes; run Get JWT again when requests start returning 401. (In a browser, the web app authenticates with its session cookie instead.)\n\nCaution: Generate and Cron call the LLM (costs money) and send real pushes. \"Store push subscription\" saves a FAKE subscription; run \"Clear push subscription\" afterwards.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "variable": [
@@ -10,12 +10,28 @@
       "value": "http://localhost:3000"
     },
     {
-      "key": "userId",
-      "value": "b19d6a47-bc86-43da-b963-88da91383ea8"
+      "key": "email",
+      "value": "test@example.com"
+    },
+    {
+      "key": "password",
+      "value": ""
+    },
+    {
+      "key": "sessionToken",
+      "value": ""
+    },
+    {
+      "key": "jwt",
+      "value": ""
     },
     {
       "key": "cronSecret",
       "value": ""
+    },
+    {
+      "key": "userId",
+      "value": "b19d6a47-bc86-43da-b963-88da91383ea8"
     },
     {
       "key": "reportId",
@@ -23,6 +39,116 @@
     }
   ],
   "item": [
+    {
+      "name": "Auth",
+      "description": "Neon Auth (Better Auth) endpoints, proxied by /api/auth/*.",
+      "auth": {
+        "type": "noauth"
+      },
+      "item": [
+        {
+          "name": "Sign in (email)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const token = pm.response.headers.get('set-auth-token') || (pm.response.json() || {}).token;",
+                  "if (token) pm.collectionVariables.set('sessionToken', token);",
+                  "pm.test('signed in', () => pm.expect(token).to.be.a('string'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{email}}\",\n  \"password\": \"{{password}}\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/sign-in/email",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "auth", "sign-in", "email"]
+            }
+          }
+        },
+        {
+          "name": "Get JWT",
+          "description": "Reads the session with the session token; the JWT arrives in the `set-auth-jwt` response header.",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const jwt = pm.response.headers.get('set-auth-jwt');",
+                  "if (jwt) pm.collectionVariables.set('jwt', jwt);",
+                  "pm.test('got a JWT', () => pm.expect(jwt).to.be.a('string'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{sessionToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/get-session",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "auth", "get-session"]
+            }
+          }
+        },
+        {
+          "name": "Sign out",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{sessionToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/sign-out",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "auth", "sign-out"]
+            }
+          }
+        }
+      ]
+    },
     {
       "name": "Preferences",
       "item": [
@@ -32,15 +158,9 @@
             "method": "GET",
             "header": [],
             "url": {
-              "raw": "{{baseUrl}}/api/preferences?userId={{userId}}",
+              "raw": "{{baseUrl}}/api/preferences",
               "host": ["{{baseUrl}}"],
-              "path": ["api", "preferences"],
-              "query": [
-                {
-                  "key": "userId",
-                  "value": "{{userId}}"
-                }
-              ]
+              "path": ["api", "preferences"]
             },
             "description": "The user joined with their preferences."
           },
@@ -75,7 +195,7 @@
             "description": "Partial update; returns the stored row. Allowed patch fields: deliveryHour (0–23), dailyCategories, weeklyCategories (arrays of: world, asia_pacific, hong_kong, economics, sport, entertainment, lifestyle, technology), pushSubscription (object or null). Unknown fields → 400. Both lists empty = paused.",
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"userId\": \"{{userId}}\",\n  \"patch\": {\n    \"deliveryHour\": 8,\n    \"dailyCategories\": [\n      \"world\",\n      \"economics\"\n    ],\n    \"weeklyCategories\": [\n      \"hong_kong\"\n    ]\n  }\n}",
+              "raw": "{\n  \"patch\": {\n    \"deliveryHour\": 8,\n    \"dailyCategories\": [\n      \"world\",\n      \"economics\"\n    ],\n    \"weeklyCategories\": [\n      \"hong_kong\"\n    ]\n  }\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -113,7 +233,7 @@
             "description": "Negative case: unknown patch keys are rejected.",
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"userId\": \"{{userId}}\",\n  \"patch\": {\n    \"frequency\": \"daily\"\n  }\n}",
+              "raw": "{\n  \"patch\": {\n    \"frequency\": \"daily\"\n  }\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -134,22 +254,19 @@
           ]
         },
         {
-          "name": "Get preferences — bad userId (400)",
+          "name": "Preferences without auth (expect 401)",
           "request": {
             "method": "GET",
             "header": [],
             "url": {
-              "raw": "{{baseUrl}}/api/preferences?userId=not-a-uuid",
+              "raw": "{{baseUrl}}/api/preferences",
               "host": ["{{baseUrl}}"],
-              "path": ["api", "preferences"],
-              "query": [
-                {
-                  "key": "userId",
-                  "value": "not-a-uuid"
-                }
-              ]
+              "path": ["api", "preferences"]
             },
-            "description": "Negative case: userId must be a uuid."
+            "description": "Negative case: no session or bearer token → 401.",
+            "auth": {
+              "type": "noauth"
+            }
           },
           "event": [
             {
@@ -174,15 +291,9 @@
             "method": "GET",
             "header": [],
             "url": {
-              "raw": "{{baseUrl}}/api/reports?userId={{userId}}",
+              "raw": "{{baseUrl}}/api/reports",
               "host": ["{{baseUrl}}"],
-              "path": ["api", "reports"],
-              "query": [
-                {
-                  "key": "userId",
-                  "value": "{{userId}}"
-                }
-              ]
+              "path": ["api", "reports"]
             },
             "description": "Recent reports, newest first. `content` holds cache pointers {category, frequency, to}. `readAt` is null while unread. Saves the newest id as {{reportId}}."
           },
@@ -206,14 +317,10 @@
             "method": "GET",
             "header": [],
             "url": {
-              "raw": "{{baseUrl}}/api/reports?userId={{userId}}&hydrate=1",
+              "raw": "{{baseUrl}}/api/reports?hydrate=1",
               "host": ["{{baseUrl}}"],
               "path": ["api", "reports"],
               "query": [
-                {
-                  "key": "userId",
-                  "value": "{{userId}}"
-                },
                 {
                   "key": "hydrate",
                   "value": "1"
@@ -235,6 +342,18 @@
           ]
         },
         {
+          "name": "Get one report (rendered)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/reports/{{reportId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "reports", "{{reportId}}"]
+            }
+          }
+        },
+        {
           "name": "Mark report read",
           "request": {
             "method": "PATCH",
@@ -252,7 +371,7 @@
             "description": "Set read status (read: true/false); returns {id, readAt}. Marking read keeps the first readAt. Run \"List reports\" first to fill {{reportId}}. 404 if the report isn't the user's.",
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"userId\": \"{{userId}}\",\n  \"reportId\": \"{{reportId}}\",\n  \"read\": true\n}",
+              "raw": "{\n  \"reportId\": \"{{reportId}}\",\n  \"read\": true\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -290,7 +409,7 @@
             "description": "Negative case: reportId must be a numeric string.",
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"userId\": \"{{userId}}\",\n  \"reportId\": \"abc\",\n  \"read\": true\n}",
+              "raw": "{\n  \"reportId\": \"abc\",\n  \"read\": true\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -357,7 +476,7 @@
             "description": "Stores a push subscription (204). This sample is FAKE (valid shape, unreachable endpoint), so later pushes to it fail. Run \"Clear push subscription\" afterwards.",
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"userId\": \"{{userId}}\",\n  \"subscription\": {\n    \"endpoint\": \"https://fcm.googleapis.com/fcm/send/postman-test-endpoint\",\n    \"expirationTime\": null,\n    \"keys\": {\n      \"p256dh\": \"BNcRdreALRFXTkOOUHK1EtK2wtaz5Ry4YfYCA_0QTpQtUbVlUls0VJXg7A8u-Ts1XbjhazAkj7I99e8QcYP7DkM\",\n      \"auth\": \"tBHItJI5svbpez7KI4CCXg\"\n    }\n  }\n}",
+              "raw": "{\n  \"subscription\": {\n    \"endpoint\": \"https://fcm.googleapis.com/fcm/send/postman-test-endpoint\",\n    \"expirationTime\": null,\n    \"keys\": {\n      \"p256dh\": \"BNcRdreALRFXTkOOUHK1EtK2wtaz5Ry4YfYCA_0QTpQtUbVlUls0VJXg7A8u-Ts1XbjhazAkj7I99e8QcYP7DkM\",\n      \"auth\": \"tBHItJI5svbpez7KI4CCXg\"\n    }\n  }\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -395,7 +514,7 @@
             "description": "Removes the stored subscription (pushSubscription: null).",
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"userId\": \"{{userId}}\",\n  \"patch\": {\n    \"pushSubscription\": null\n  }\n}",
+              "raw": "{\n  \"patch\": {\n    \"pushSubscription\": null\n  }\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -553,7 +672,20 @@
             }
           ]
         }
-      ]
+      ],
+      "auth": {
+        "type": "noauth"
+      }
     }
-  ]
+  ],
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{jwt}}",
+        "type": "string"
+      }
+    ]
+  }
 }
