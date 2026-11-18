@@ -4,7 +4,14 @@ node_modules/
 .idea
 .agents
 docs
-scripts/llm-tuning.ts
+apps/web/scripts/llm-tuning.ts
 .next
 next-env.d.ts
-*tsbuildinfo
+*tsbuildinfo.expo/
+dist/
+apps/mobile/ios/
+apps/mobile/android/
+*.jks
+*.p8
+*.p12
+*.mobileprovision

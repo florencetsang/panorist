@@ -4,3 +4,7 @@ node_modules
 package-lock.json
 skills-lock.json
 *.md
+.expo
+dist
+apps/mobile/ios
+apps/mobile/android

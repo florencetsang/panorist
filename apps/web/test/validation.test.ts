@@ -1,0 +1,107 @@
+import { readFileSync, readdirSync } from 'node:fs';
+import { describe, expect, it } from 'vitest';
+
+import { CATEGORY_SLUGS } from '@panorist/core/categories';
+import {
+  isCategoryList,
+  isDeliveryHour,
+  isPushSubscription,
+  isReportId,
+  isTimeZone,
+  isUuid,
+  parsePreferencesPatch,
+} from '@panorist/core/validation';
+
+const UUID = '3f2504e0-4f89-41d3-9a0c-0305e82c3301';
+const SUBSCRIPTION = {
+  endpoint: 'https://push.example/x',
+  // Real shapes: an 87-char base64url P-256 point and a 22-char auth secret.
+  keys: { p256dh: `B${'A'.repeat(86)}`, auth: 'A'.repeat(22) },
+};
+
+describe('primitive validators', () => {
+  it('isUuid', () => {
+    expect(isUuid(UUID)).toBe(true);
+    expect(isUuid(UUID.toUpperCase())).toBe(true);
+    expect(isUuid('not-a-uuid')).toBe(false);
+    expect(isUuid(null)).toBe(false);
+  });
+
+  it('isReportId', () => {
+    expect(['1', '42', '9223372036854775807'].every(isReportId)).toBe(true);
+    expect(
+      ['0', '01', '-1', '1.5', '', ' 1', '9223372036854775808', 42, null].some(isReportId),
+    ).toBe(false);
+  });
+
+  it('isDeliveryHour', () => {
+    expect([0, 23].every(isDeliveryHour)).toBe(true);
+    expect([-1, 24, 8.5, '8', NaN].some(isDeliveryHour)).toBe(false);
+  });
+
+  it('isCategoryList', () => {
+    expect(isCategoryList([])).toBe(true);
+    expect(isCategoryList(['world', 'sport'])).toBe(true);
+    expect(isCategoryList(['world', 'nope'])).toBe(false);
+    expect(isCategoryList('world')).toBe(false);
+  });
+
+  it('isPushSubscription', () => {
+    expect(isPushSubscription(SUBSCRIPTION)).toBe(true);
+    expect(isPushSubscription({ ...SUBSCRIPTION, expirationTime: null })).toBe(true);
+    expect(isPushSubscription({ ...SUBSCRIPTION, endpoint: '' })).toBe(false);
+    expect(isPushSubscription({ endpoint: 'https://x' })).toBe(false);
+    expect(isPushSubscription({ ...SUBSCRIPTION, keys: { p256dh: 'p', auth: 'a' } })).toBe(false);
+  });
+});
+
+describe('parsePreferencesPatch', () => {
+  it('accepts a valid partial patch', () => {
+    expect(parsePreferencesPatch({ deliveryHour: 7, dailyCategories: [] })).toEqual({
+      deliveryHour: 7,
+      dailyCategories: [],
+    });
+    expect(parsePreferencesPatch({ pushSubscription: null })).toEqual({ pushSubscription: null });
+  });
+
+  it('rejects unknown keys and invalid values with a message', () => {
+    expect(parsePreferencesPatch({ frequency: 'daily' })).toMatch(
+      /unknown patch field "frequency"/,
+    );
+    expect(parsePreferencesPatch({ deliveryHour: 24 })).toMatch(/deliveryHour/);
+    expect(parsePreferencesPatch({ weeklyCategories: ['x'] })).toMatch(/weeklyCategories/);
+    expect(parsePreferencesPatch({ toString: 1 })).toMatch(/unknown patch field/);
+  });
+});
+
+describe('isTimeZone', () => {
+  it('accepts IANA names and rejects offsets and junk', () => {
+    expect(isTimeZone('Asia/Hong_Kong')).toBe(true);
+    expect(isTimeZone('UTC')).toBe(true);
+    expect(isTimeZone('Etc/GMT+8')).toBe(true);
+    expect(isTimeZone('+08:00')).toBe(false);
+    expect(isTimeZone('Mars/Olympus_Mons')).toBe(false);
+    expect(isTimeZone('')).toBe(false);
+    expect(isTimeZone(8)).toBe(false);
+  });
+
+  it('validates timezone in a preferences patch', () => {
+    expect(parsePreferencesPatch({ timezone: 'Europe/London' })).toEqual({
+      timezone: 'Europe/London',
+    });
+    expect(parsePreferencesPatch({ timezone: 'nope' })).toMatch(/timezone/);
+  });
+});
+
+describe('category vocabulary', () => {
+  it('matches every CHECK constraint in the migrations', () => {
+    const sql = readdirSync('db/migrations')
+      .map((f) => readFileSync(`db/migrations/${f}`, 'utf8'))
+      .join('\n');
+    const lists = [...sql.matchAll(/ARRAY\[([^\]]+)\]|category IN \(([^)]+)\)/g)].map((m) =>
+      (m[1] ?? m[2]).split(',').map((s) => s.trim().replace(/'/g, '')),
+    );
+    expect(lists.length).toBeGreaterThanOrEqual(3);
+    for (const list of lists) expect(list).toEqual([...CATEGORY_SLUGS]);
+  });
+});
