@@ -7,7 +7,10 @@ docs
 apps/web/scripts/llm-tuning.ts
 .next
 next-env.d.ts
-*tsbuildinfo.expo/
+*tsbuildinfo
+.expo/
+expo-env.d.ts
+apps/mobile/.env
 dist/
 apps/mobile/ios/
 apps/mobile/android/
