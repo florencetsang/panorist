@@ -50,7 +50,11 @@ npm run dev:mobile                              # Expo, in another; press i / a,
 ```
 
 On a physical device `EXPO_PUBLIC_API_URL` must be reachable from the phone
-(your machine's LAN IP, or a deployed URL). Store builds use
+(your machine's LAN IP, or a deployed URL). Google sign-in additionally needs
+HTTPS (the session cookie is `__Secure-`): run an HTTPS tunnel such as
+`cloudflared tunnel --url http://localhost:3000`, use its URL as
+`EXPO_PUBLIC_API_URL`, add it as a Neon Auth trusted domain, and restart with
+`npx expo start --clear`. Store builds use
 [EAS](https://docs.expo.dev/build/introduction/): `npx eas build` from
 `apps/mobile` (profiles in `eas.json`; set `EXPO_PUBLIC_API_URL` per profile).
 Change `ios.bundleIdentifier` / `android.package` in `app.json` before the
