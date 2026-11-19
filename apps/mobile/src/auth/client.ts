@@ -99,7 +99,8 @@ async function authFetch(
       body: init.body === undefined ? undefined : JSON.stringify(init.body),
     });
   } catch {
-    throw new AuthError(0, 'NETWORK', 'Can’t reach Panorist. Check your connection.');
+    const where = __DEV__ ? ` (tried ${API_URL})` : '';
+    throw new AuthError(0, 'NETWORK', `Can’t reach Panorist${where}. Check your connection.`);
   }
   const data: unknown = await res.json().catch(() => null);
   if (!res.ok) {
