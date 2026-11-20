@@ -3,45 +3,80 @@
 Personalized news briefings. Each user picks categories for a **daily** report
 and, separately, a **weekly** (local Monday) report. At their chosen local
 hour a cron job asks a search-grounded LLM for the news in each category,
-stores the report, and sends a web push. The frontend lists past reports
-(with read/unread status) and edits preferences.
+stores the report, and sends a web push. Readers sign in on the web or in the
+iOS/Android app to read past reports (with read/unread status) and edit
+preferences.
 
 Prototype goals: minimal code, near-zero fixed cost, scales to zero.
 
 **Stack:** Next.js (App Router, TypeScript) on Vercel · Neon serverless
-Postgres (plain SQL, no ORM) · Gemini with Google Search grounding · Vercel
-Cron · Web Push (VAPID) · Tailwind CSS.
+Postgres (plain SQL, no ORM) · Neon Auth (managed Better Auth) · Gemini with
+Google Search grounding · Vercel Cron · Web Push (VAPID) · Tailwind CSS ·
+Expo / React Native for mobile.
+
+An npm-workspaces monorepo:
+
+| Workspace | What |
+| --- | --- |
+| `apps/web` (`@panorist/web`) | Next.js site **and** the JSON API, auth proxy, cron and workers |
+| `apps/mobile` (`@panorist/mobile`) | Expo (React Native) app for iOS and Android; talks to `apps/web`'s API |
+| `packages/core` (`@panorist/core`) | Shared TypeScript: types, API client, validation, markdown parser, formatting, design tokens |
 
 How it works and why it's built this way: [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## Getting started
 
-Requires Node 24+ (scripts are TypeScript run directly by Node).
+Requires Node 24+ (scripts are TypeScript run directly by Node). Run every
+command from the repository root; `npm install` installs all workspaces.
 
-1. **Environment** — copy `.env.example` to `.env.local` and fill it in.
-   `DATABASE_URL` / `DATABASE_URL_UNPOOLED` come from `neon env pull`.
-2. **Database** — `npm run db:setup` applies pending migrations and seeds a
+1. **Environment** — copy `apps/web/.env.example` to `apps/web/.env.local`
+   and fill it in. `DATABASE_URL` / `DATABASE_URL_UNPOOLED` come from
+   `neon env pull`.
+2. **Auth** — enable Neon Auth on the branch (see [Sign-in](#sign-in-neon-auth)),
+   then set `NEON_AUTH_BASE_URL` and `NEON_AUTH_COOKIE_SECRET`.
+3. **Database** — `npm run db:setup` applies pending migrations and seeds a
    test user (`test@example.com`, 08:00 Asia/Hong_Kong, daily: world +
-   economics, weekly: hong_kong).
-3. **Run** — `npm run dev`, then open http://localhost:3000. Pages act as the
-   `?userId=<uuid>` user, defaulting to the seeded one (there is no real auth
-   yet).
+   economics, weekly: hong_kong). Signing up with that email (verified)
+   claims the seeded user.
+4. **Run** — `npm run dev`, then open http://localhost:3000 and create an
+   account. New accounts start with no topics; pick some under Preferences.
+
+### Mobile app
+
+```bash
+cp apps/mobile/.env.example apps/mobile/.env   # EXPO_PUBLIC_API_URL → your web app
+npm run dev                                     # the API, in one terminal
+npm run dev:mobile                              # Expo, in another; press i / a, or scan with Expo Go
+```
+
+On a physical device `EXPO_PUBLIC_API_URL` must be reachable from the phone
+(your machine's LAN IP, or a deployed URL). Google sign-in additionally needs
+HTTPS (the session cookie is `__Secure-`): run an HTTPS tunnel such as
+`cloudflared tunnel --url http://localhost:3000`, use its URL as
+`EXPO_PUBLIC_API_URL`, add it as a Neon Auth trusted domain, and restart with
+`npx expo start --clear`. Store builds use
+[EAS](https://docs.expo.dev/build/introduction/): `npx eas build` from
+`apps/mobile` (profiles in `eas.json`; set `EXPO_PUBLIC_API_URL` per profile).
+Change `ios.bundleIdentifier` / `android.package` in `app.json` before the
+first store build.
 
 ## Scripts
 
 | Command | What it does |
 | --- | --- |
-| `npm run dev` / `build` / `start` | Next.js |
-| `npm run typecheck` | Generates Next route types, then runs `tsc` (TypeScript 7) |
-| `npm run lint` | ESLint (`eslint-config-next`) |
-| `npm run format` / `format:check` | Prettier |
-| `npm test` / `test:watch` | Vitest unit tests (`test/`) — no database or network |
-| `npm run db:migrate` | Apply pending `db/migrations/*.sql` |
+| `npm run dev` / `build` | Next.js (`apps/web`) |
+| `npm run dev:mobile` | Expo dev server (`apps/mobile`) |
+| `npm run typecheck` | Every workspace: Next route types, then `tsc` (TypeScript 7) |
+| `npm run lint` | ESLint (`eslint-config-next`, `apps/web`) |
+| `npm run format` / `format:check` | Prettier, whole repo |
+| `npm test` | Vitest unit tests (`apps/web/test`, `packages/core/test`) — no database or network |
+| `npm run db:migrate` | Apply pending `apps/web/db/migrations/*.sql` |
 | `npm run db:setup` | `db:migrate` + `db/seed.sql` |
-| `npm run vapid:generate` | New VAPID keypair for web push |
-| `npm run icons:generate` | Regenerate favicon and app icons from `scripts/generate-icons.ts` |
+| `npm run vapid:generate -w @panorist/web` | New VAPID keypair for web push |
+| `npm run icons:generate -w @panorist/web` | Regenerate favicon and app icons |
+| `npx expo export -p ios -p android` (in `apps/mobile`) | Bundle the app, to check it builds |
 
-Manual checks against real services (both need `.env.local`):
+Manual checks against real services (run in `apps/web`; both need `.env.local`):
 
 ```bash
 # Every DB helper against the configured database (non-destructive).
@@ -54,8 +89,8 @@ node --env-file=.env.local --conditions react-server scripts/llm-live.ts hong_ko
 outside Next.js.)
 
 To exercise the HTTP API by hand, import
-`postman/panorist.postman_collection.json` into Postman and set the
-`baseUrl`, `userId` and `cronSecret` collection variables.
+`apps/web/postman/panorist.postman_collection.json` into Postman and set the
+`baseUrl`, `sessionToken` and `cronSecret` collection variables.
 
 CI (`.github/workflows/ci.yml`) runs format check, lint, typecheck, tests and
 build on every push and pull request.
@@ -158,44 +193,86 @@ when a worker call fails.
 
 ### Web push
 
-Generate one keypair per deployment with `npm run vapid:generate`, then set
+Generate one keypair per deployment with `npm run vapid:generate -w @panorist/web`, then set
 `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY` and `VAPID_SUBJECT` in `.env.local`
 **and** in the Vercel dashboard (then redeploy). Push needs HTTPS; browsers
 exempt localhost.
 
+### Sign-in (Neon Auth)
+
+Accounts are [Neon Auth](https://neon.com/docs/auth/overview) (managed Better
+Auth): users and sessions live in the branch's `neon_auth` schema, and each
+Neon branch has its own Auth URL. Sign-in methods: email + password (with an
+emailed verification code) and Google.
+
+1. Enable it: `neon.ts` declares `auth: true`, so `neon deploy` turns it on
+   (or Console → Auth). `neon neon-auth status` shows the Auth URL →
+   `NEON_AUTH_BASE_URL`.
+2. `NEON_AUTH_COOKIE_SECRET`: `openssl rand -base64 32`.
+3. **Trusted domains:** add every deployed origin, e.g.
+   `neon neon-auth domain add https://panorist.example`. Localhost is allowed
+   by default.
+4. **Google:** the shared development credentials work out of the box. For
+   production, create your own Google OAuth client with the redirect URI
+   `{NEON_AUTH_BASE_URL}/callback/google` and configure it in Neon.
+5. **Email:** verification codes go out via Neon's shared sender. Configure
+   custom SMTP before launch (Neon's production checklist).
+6. Set the same variables in Vercel, then redeploy.
+
+The mobile app uses the same accounts via the web app (`/api/auth/*` and
+`/mobile/*`); see ARCHITECTURE.md.
+
+### Deploying to Vercel
+
+The Next.js app lives in `apps/web`: set the Vercel project's **Root
+Directory** to `apps/web` (Vercel installs the workspace from the repo root).
+`apps/web/vercel.json` holds the cron schedule.
+
 ## Project layout
 
 ```
-app/                    Next.js pages and route handlers (thin: validate → service → HTTP)
-  api/cron/             GET — Vercel Cron entry point; fans out to /api/generate
-  api/generate/         POST {userId} — per-user report worker (x-cron-secret)
-  api/preferences/      GET / PATCH a user's preferences
-  api/push/subscribe/   GET VAPID public key · POST a push subscription
-  api/reports/          GET a user's reports (?hydrate=1 adds rendered topics)
-  page.tsx, reports-list.tsx, preferences/, nav.tsx, layout.tsx
-components/             presentational React components (report card, markdown, …)
-lib/
-  shared/               isomorphic: types, categories, validation, markdown parser, user id
-  client/               browser-only: typed API client, web-push subscribe flow
-  server/               server-only (import 'server-only')
-    env.ts              all environment access, read lazily
-    auth.ts, http.ts    cron-secret guard, JSON error helpers
-    db/                 data access per table (plain SQL via the Neon HTTP driver)
-    llm/                LlmProvider interface, Gemini implementation, retrying transport
-    reports/            report periods, prompts, generation, "due now" orchestration
-    cron/               dispatch to workers, tick logger, cron_runs tracing
-    push.ts             web-push sender
-db/migrations/          numbered schema migrations · db/seed.sql
-scripts/                migrate.ts, smoke.ts, llm-live.ts
-test/                   Vitest unit tests
-public/sw.js            service worker (push → notification → open app)
-public/icons/           manifest + notification icons (generated; app/icon.svg, favicon.ico, apple-icon.png too)
+apps/web/
+  app/
+    (auth)/             sign-in, sign-up (editorial cover + form)
+    (app)/              signed-in pages: briefings (/), reports/[id] reader, preferences
+    mobile/             sign-in (Google, for the app) and handoff (session → app)
+    api/auth/[...path]  Neon Auth proxy (Better Auth endpoints)
+    api/cron/           GET — Vercel Cron entry point; fans out to /api/generate
+    api/generate/       POST {userId} — per-user report worker (x-cron-secret)
+    api/preferences/    GET / PATCH the signed-in user's preferences
+    api/push/subscribe/ GET VAPID public key · POST a push subscription
+    api/reports/        GET reports (?hydrate=1) · PATCH read state · [id] GET one, rendered
+  proxy.ts              redirects signed-out visitors to /sign-in; completes OAuth
+  components/           UI (design-system primitives, header, briefings, reader, …)
+  lib/
+    client/             browser-only: API client, auth client, web push, theme
+    server/             server-only (import 'server-only')
+      auth/             Neon Auth instance, requireUser (cookie or bearer JWT), app-user link
+      env.ts            all environment access, read lazily
+      cron-secret.ts    cron/worker guard · http.ts JSON error helpers
+      db/               data access per table (plain SQL via the Neon HTTP driver)
+      llm/              LlmProvider interface, Gemini implementation, retrying transport
+      reports/          report periods, prompts, generation, "due now" orchestration
+      cron/             dispatch to workers, tick logger, cron_runs tracing
+      push.ts           web-push sender
+  db/migrations/        numbered schema migrations · db/seed.sql
+  scripts/              migrate.ts, smoke.ts, llm-live.ts
+  test/                 Vitest unit tests
+  public/sw.js          service worker (push → notification → open report)
+apps/mobile/
+  app/                  expo-router routes: (auth) sign-in/up, (app) tabs + reports/[id]
+  src/auth/             native Neon Auth client (SecureStore session, JWT) and session context
+  src/screens/          briefings, reader, preferences, account, auth
+  src/ui/               theme (from core tokens), primitives, native markdown renderer
+packages/core/src/      types, api (typed client), validation, categories, markdown,
+                        format, timezones, design (palette, type scale)
 ```
 
 ## Known limitations
 
-- **No authentication.** Identity is the `?userId=` query parameter, so anyone
-  can read or edit any user's data. `lib/shared/user-id.ts` is the seam to
-  replace; do this before any public launch.
+- The mobile app has no push notifications yet (web push only); it shows new
+  briefings when opened.
+- Sign-out ends the session, but a mobile JWT already issued stays valid until
+  it expires (15 minutes).
 - Report dates render in the visitor's timezone, not the user's stored one.
 - The weekly report day (Monday) is hard-coded.

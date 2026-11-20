@@ -1,0 +1,21 @@
+{
+  "name": "@panorist/core",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Shared, platform-agnostic code for the Panorist web and mobile apps: domain types, validation, categories, markdown parsing, the HTTP API client and design tokens.",
+  "exports": {
+    "./api": "./src/api.ts",
+    "./categories": "./src/categories.ts",
+    "./design": "./src/design.ts",
+    "./format": "./src/format.ts",
+    "./markdown": "./src/markdown.ts",
+    "./timezones": "./src/timezones.ts",
+    "./types": "./src/types.ts",
+    "./validation": "./src/validation.ts"
+  },
+  "scripts": {
+    "typecheck": "node ../../node_modules/typescript-native/bin/tsc --noEmit",
+    "test": "vitest run"
+  }
+}
