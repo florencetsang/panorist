@@ -57,7 +57,10 @@ Methods: email + password (verified with an emailed code) and Google.
   so `apps/mobile/src/auth/client.ts` calls the same `/api/auth/*` endpoints
   over HTTP:
   - Email sign-in returns a session token, stored in the keychain
-    (SecureStore).
+    (SecureStore). Neon Auth only accepts the session as a cookie, so the
+    proxy bridges it (`lib/server/auth/mobile-session.ts`): it copies the
+    session cookie into a `set-auth-token` response header, and turns
+    `Authorization: Bearer <session token>` back into the cookie.
   - `get-session` with that token returns a 15-minute **JWT** in the
     `set-auth-jwt` header. The JWT, not the session token, authenticates
     Panorist's API, and is renewed shortly before it expires.

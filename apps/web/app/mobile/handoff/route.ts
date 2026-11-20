@@ -22,7 +22,8 @@ export async function GET(request: Request): Promise<Response> {
 
   const token = (await cookies()).get(SESSION_TOKEN_COOKIE)?.value;
   const url = new URL(target);
-  if (token) url.searchParams.set('token', token);
+  // Re-encode as it appears in Set-Cookie: the app replays it as that cookie.
+  if (token) url.searchParams.set('token', encodeURIComponent(token));
   else url.searchParams.set('error', 'no_session');
   return new Response(null, {
     status: 302,

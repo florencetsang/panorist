@@ -20,5 +20,4 @@ export function neonAuth(): NeonAuth {
   return instance;
 }
 
-/** Session cookie set by the proxy; holds the Better Auth session token (see the mobile handoff). */
-export const SESSION_TOKEN_COOKIE = '__Secure-neon-auth.session_token';
+export { SESSION_TOKEN_COOKIE } from './session-cookie.ts';

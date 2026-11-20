@@ -21,7 +21,6 @@ import * as WebBrowser from 'expo-web-browser';
 import { API_URL } from '../lib/config.ts';
 
 const STORE_KEY = 'panorist.session.v1';
-const SESSION_COOKIE = '__Secure-neon-auth.session_token';
 /** Renew the JWT this long before it expires. */
 const JWT_SKEW_MS = 60_000;
 
@@ -73,12 +72,8 @@ export async function clearSession(): Promise<void> {
 // ---- HTTP ------------------------------------------------------------------
 
 function sessionHeaders(token: string): Record<string, string> {
-  return {
-    authorization: `Bearer ${token}`,
-    // Same token as a cookie, for an upstream that only reads cookies.
-    // Only the signed form ("<token>.<signature>") is a valid cookie.
-    ...(token.includes('.') ? { cookie: `${SESSION_COOKIE}=${encodeURIComponent(token)}` } : {}),
-  };
+  // The web app's /api/auth proxy turns this into Neon Auth's session cookie.
+  return { authorization: `Bearer ${token}` };
 }
 
 async function authFetch(
