@@ -23,6 +23,7 @@ import { API_URL } from '../lib/config.ts';
 const STORE_KEY = 'panorist.session.v1';
 /** Renew the JWT this long before it expires. */
 const JWT_SKEW_MS = 60_000;
+const REQUEST_TIMEOUT_MS = 20_000;
 
 export interface AuthUser {
   id: string;
@@ -81,9 +82,13 @@ async function authFetch(
   init: { method?: 'GET' | 'POST'; body?: unknown; token?: string } = {},
 ): Promise<{ data: unknown; headers: Headers }> {
   let res: Response;
+  // An unreachable host can otherwise leave fetch pending indefinitely.
+  const timeout = new AbortController();
+  const timer = setTimeout(() => timeout.abort(), REQUEST_TIMEOUT_MS);
   try {
     res = await fetch(`${API_URL}/api/auth/${path}`, {
       method: init.method ?? 'GET',
+      signal: timeout.signal,
       // Never let the platform cookie jar add or keep a web session.
       credentials: 'omit',
       headers: {
@@ -96,6 +101,8 @@ async function authFetch(
   } catch {
     const where = __DEV__ ? ` (tried ${API_URL})` : '';
     throw new AuthError(0, 'NETWORK', `Can’t reach Panorist${where}. Check your connection.`);
+  } finally {
+    clearTimeout(timer);
   }
   const data: unknown = await res.json().catch(() => null);
   if (!res.ok) {
