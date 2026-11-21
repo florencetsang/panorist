@@ -48,12 +48,20 @@ export function AuthForm({ mode }: { mode: Mode }) {
     setBusy('email');
     setError(null);
     if (mode === 'sign-up') {
-      const { error } = await attempt(() =>
+      const { error, data } = await attempt(() =>
         authClient.signUp.email({ email, password, name: name.trim() || email.split('@')[0] }),
       );
       if (error) {
         setBusy(null);
         return setError(authErrorMessage(error));
+      }
+      // Neon Auth has already emailed a code. Asking for another would
+      // replace it, making the first email's code invalid.
+      if (
+        (data as { user?: { emailVerified?: boolean } } | undefined)?.user?.emailVerified === false
+      ) {
+        setBusy(null);
+        return setVerifying(true);
       }
     }
     const { error } = await attempt(() => authClient.signIn.email({ email, password }));
@@ -215,7 +223,8 @@ function VerifyEmail({
     <div>
       <h1 className="font-serif text-4xl font-medium tracking-tight">Check your inbox</h1>
       <p className="mt-2 text-ink-muted">
-        We sent a verification code to <span className="font-medium text-ink">{email}</span>.
+        We sent a verification code to <span className="font-medium text-ink">{email}</span>. If you
+        have more than one, use the newest — each new code replaces the last.
       </p>
       <form onSubmit={onSubmit} className="mt-8 space-y-4">
         <Field
