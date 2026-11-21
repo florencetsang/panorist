@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
+import { authErrorMessage, isUnverified } from '../lib/client/auth-errors.ts';
 import type { AuthIdentity } from '../lib/server/auth/identity.ts';
 import { isAllowedAppRedirect } from '../lib/server/auth/mobile-redirect.ts';
 import {
@@ -126,5 +127,21 @@ describe('mobile session bridge', () => {
     const cleared = new Response(null);
     cleared.headers.append('set-cookie', '__Secure-neon-auth.session_token=; Max-Age=0');
     expect(withSessionTokenHeader(cleared).headers.get('set-auth-token')).toBeNull();
+  });
+});
+
+describe('auth error mapping', () => {
+  it('recognises the Neon SDK’s rewritten unverified-email code', () => {
+    const sdkError = {
+      code: 'email_not_confirmed',
+      status: 422,
+      message: 'Email verification required',
+    };
+    expect(isUnverified(sdkError)).toBe(true);
+    expect(isUnverified({ code: 'EMAIL_NOT_VERIFIED' })).toBe(true);
+    expect(isUnverified({ code: 'invalid_credentials' })).toBe(false);
+    expect(authErrorMessage({ code: 'invalid_credentials' })).toBe(
+      'That email and password don’t match.',
+    );
   });
 });
