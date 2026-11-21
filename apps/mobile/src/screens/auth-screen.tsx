@@ -58,6 +58,8 @@ export function AuthScreen({ mode }: { mode: Mode }) {
             password,
           );
           if (session) return setSession(session);
+          // No session: Neon Auth has already emailed a code; another would replace it.
+          return setVerifying(true);
         }
         setSession(await signInWithEmail(address, password));
       } catch (err) {
