@@ -31,7 +31,11 @@ export async function verifyBearerToken(token: string): Promise<AuthIdentity | n
       name: typeof payload.name === 'string' ? payload.name : null,
       emailVerified: payload.emailVerified === true,
     };
-  } catch {
+  } catch (err) {
+    // Logged without the token. A JWKS from another Neon branch shows up as
+    // ERR_JWKS_NO_MATCHING_KEY; a wrong Auth URL as ERR_JWT_CLAIM_VALIDATION_FAILED.
+    const code = (err as { code?: string }).code ?? 'unknown';
+    console.warn(`[auth] bearer JWT rejected (${code}): ${(err as Error).message}`);
     return null;
   }
 }
