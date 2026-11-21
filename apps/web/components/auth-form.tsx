@@ -11,7 +11,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { useState, type FormEvent } from 'react';
 
 import { authClient } from '../lib/client/auth.ts';
-import { authErrorMessage, isUnverified } from '../lib/client/auth-errors.ts';
+import { authErrorMessage, isUnverified, oauthErrorMessage } from '../lib/client/auth-errors.ts';
 import { safeRedirect } from '../lib/client/redirect.ts';
 import { Button, Field, GoogleIcon, Notice } from './ui.tsx';
 
@@ -30,12 +30,16 @@ async function attempt(call: () => Promise<{ error?: AuthError | null } | unknow
 
 export function AuthForm({ mode }: { mode: Mode }) {
   const router = useRouter();
-  const redirect = safeRedirect(useSearchParams().get('redirect'));
+  const params = useSearchParams();
+  const redirect = safeRedirect(params.get('redirect'));
+  const oauthError = params.get('error');
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [busy, setBusy] = useState<'email' | 'google' | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(
+    oauthError ? oauthErrorMessage(oauthError) : null,
+  );
   const [verifying, setVerifying] = useState(false);
 
   function done() {
@@ -87,6 +91,8 @@ export function AuthForm({ mode }: { mode: Mode }) {
       authClient.signIn.social({
         provider: 'google',
         callbackURL: `${location.origin}${redirect}`,
+        // Failures come back here with ?error=, instead of a bare redirect.
+        errorCallbackURL: `${location.origin}${location.pathname}?redirect=${encodeURIComponent(redirect)}`,
       }),
     );
     // On success the browser navigates away; only failures land here.

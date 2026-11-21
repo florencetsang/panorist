@@ -39,3 +39,22 @@ export function authErrorMessage(
 
 export const isUnverified = (error: { code?: string } | null | undefined) =>
   error?.code === 'EMAIL_NOT_VERIFIED' || error?.code === 'email_not_confirmed';
+
+/**
+ * Copy for the `?error=` code that Better Auth appends to errorCallbackURL
+ * when a social sign-in fails after leaving the site.
+ */
+export function oauthErrorMessage(code: string): string {
+  switch (code) {
+    case 'account_not_linked':
+      // Linking needs a verified local email, so an unverified sign-up
+      // can't take over the address.
+      return 'This email already has a Panorist account. Sign in with your email and password first — once your email is verified, Google sign-in will work too.';
+    case 'access_denied':
+      return 'Google sign-in was cancelled.';
+    case 'email_not_found':
+      return 'Google didn’t share an email address, so we couldn’t sign you in.';
+    default:
+      return 'Google sign-in didn’t finish. Try again.';
+  }
+}

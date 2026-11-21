@@ -4,13 +4,17 @@ import { useSearchParams } from 'next/navigation';
 import { useEffect, useRef, useState } from 'react';
 
 import { authClient } from '../lib/client/auth.ts';
-import { authErrorMessage } from '../lib/client/auth-errors.ts';
+import { authErrorMessage, oauthErrorMessage } from '../lib/client/auth-errors.ts';
 import { Button, GoogleIcon, Notice } from './ui.tsx';
 import { Wordmark } from './wordmark.tsx';
 
 export function MobileGoogleSignIn() {
-  const appRedirect = useSearchParams().get('redirect') ?? '';
-  const [error, setError] = useState<string | null>(null);
+  const params = useSearchParams();
+  const appRedirect = params.get('redirect') ?? '';
+  const oauthError = params.get('error');
+  const [error, setError] = useState<string | null>(
+    oauthError ? oauthErrorMessage(oauthError) : null,
+  );
   const [busy, setBusy] = useState(false);
   const started = useRef(false);
 
@@ -22,6 +26,8 @@ export function MobileGoogleSignIn() {
       const { error } = await authClient.signIn.social({
         provider: 'google',
         callbackURL: handoff,
+        // Failures return to this page with ?error=, which stops the auto-start.
+        errorCallbackURL: `${location.origin}${location.pathname}?redirect=${encodeURIComponent(appRedirect)}`,
       });
       // On success the browser navigates away; only failures land here.
       if (error) throw error;
@@ -32,11 +38,11 @@ export function MobileGoogleSignIn() {
   }
 
   useEffect(() => {
-    if (started.current || !appRedirect) return;
+    if (started.current || !appRedirect || oauthError) return;
     started.current = true;
     void start();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [appRedirect]);
+  }, [appRedirect, oauthError]);
 
   return (
     <main className="grid min-h-dvh place-items-center bg-paper px-6">
