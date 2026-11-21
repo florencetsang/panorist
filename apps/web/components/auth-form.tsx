@@ -11,7 +11,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { useState, type FormEvent } from 'react';
 
 import { authClient } from '../lib/client/auth.ts';
-import { authErrorMessage, isUnverified } from '../lib/client/auth-errors.ts';
+import { authErrorMessage, isUnverified, oauthErrorMessage } from '../lib/client/auth-errors.ts';
 import { safeRedirect } from '../lib/client/redirect.ts';
 import { Button, Field, GoogleIcon, Notice } from './ui.tsx';
 
@@ -30,12 +30,16 @@ async function attempt(call: () => Promise<{ error?: AuthError | null } | unknow
 
 export function AuthForm({ mode }: { mode: Mode }) {
   const router = useRouter();
-  const redirect = safeRedirect(useSearchParams().get('redirect'));
+  const params = useSearchParams();
+  const redirect = safeRedirect(params.get('redirect'));
+  const oauthError = params.get('error');
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [busy, setBusy] = useState<'email' | 'google' | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(
+    oauthError ? oauthErrorMessage(oauthError) : null,
+  );
   const [verifying, setVerifying] = useState(false);
 
   function done() {
@@ -48,12 +52,20 @@ export function AuthForm({ mode }: { mode: Mode }) {
     setBusy('email');
     setError(null);
     if (mode === 'sign-up') {
-      const { error } = await attempt(() =>
+      const { error, data } = await attempt(() =>
         authClient.signUp.email({ email, password, name: name.trim() || email.split('@')[0] }),
       );
       if (error) {
         setBusy(null);
         return setError(authErrorMessage(error));
+      }
+      // Neon Auth has already emailed a code. Asking for another would
+      // replace it, making the first email's code invalid.
+      if (
+        (data as { user?: { emailVerified?: boolean } } | undefined)?.user?.emailVerified === false
+      ) {
+        setBusy(null);
+        return setVerifying(true);
       }
     }
     const { error } = await attempt(() => authClient.signIn.email({ email, password }));
@@ -79,6 +91,8 @@ export function AuthForm({ mode }: { mode: Mode }) {
       authClient.signIn.social({
         provider: 'google',
         callbackURL: `${location.origin}${redirect}`,
+        // Failures come back here with ?error=, instead of a bare redirect.
+        errorCallbackURL: `${location.origin}${location.pathname}?redirect=${encodeURIComponent(redirect)}`,
       }),
     );
     // On success the browser navigates away; only failures land here.
@@ -215,7 +229,8 @@ function VerifyEmail({
     <div>
       <h1 className="font-serif text-4xl font-medium tracking-tight">Check your inbox</h1>
       <p className="mt-2 text-ink-muted">
-        We sent a verification code to <span className="font-medium text-ink">{email}</span>.
+        We sent a verification code to <span className="font-medium text-ink">{email}</span>. If you
+        have more than one, use the newest — each new code replaces the last.
       </p>
       <form onSubmit={onSubmit} className="mt-8 space-y-4">
         <Field
