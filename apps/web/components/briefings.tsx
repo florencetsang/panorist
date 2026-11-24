@@ -11,10 +11,10 @@ import {
   frequencyLabel,
   greeting,
   groupByMonth,
-  hourLabel,
   periodLabel,
   reportHeadline,
 } from '@panorist/core/format';
+import { DELIVERY_LABEL } from '@panorist/core/delivery';
 import type { ReportWire, UserWithPreferencesWire } from '@panorist/core/types';
 import { authClient } from '../lib/client/auth.ts';
 import { api, ApiError } from '../lib/client/api.ts';
@@ -153,7 +153,7 @@ function ScheduleNote({ prefs }: { prefs: UserWithPreferencesWire }) {
       <Eyebrow className="!text-accent">Set up</Eyebrow>
       <p className="mt-2 font-serif text-2xl font-medium">Choose what you want to follow.</p>
       <p className="mt-2 text-ink-muted">
-        Pick your beats and a delivery time, and your first briefing will arrive at that hour.
+        Pick your beats, and your first briefing will arrive at {DELIVERY_LABEL}.
       </p>
       <ButtonLink href="/preferences" className="mt-5">
         Choose beats
@@ -240,8 +240,7 @@ function EmptyState({ prefs }: { prefs: UserWithPreferencesWire }) {
     <div className="rounded-3xl border border-dashed border-rule p-10 text-center">
       <p className="font-serif text-2xl font-medium">Nothing to read yet</p>
       <p className="mx-auto mt-2 max-w-sm text-ink-muted">
-        Your first briefing arrives at {hourLabel(prefs.deliveryHour)} ({prefs.timezone}). We’ll
-        notify you if notifications are on.
+        Your first briefing arrives at {DELIVERY_LABEL}. We’ll notify you if notifications are on.
       </p>
     </div>
   );

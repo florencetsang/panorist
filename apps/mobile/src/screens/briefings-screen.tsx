@@ -9,11 +9,11 @@ import {
   frequencyLabel,
   greeting,
   groupByMonth,
-  hourLabel,
   mastheadDate,
   periodLabel,
   reportHeadline,
 } from '@panorist/core/format';
+import { DELIVERY_LABEL } from '@panorist/core/delivery';
 import type { ReportWire, UserWithPreferencesWire } from '@panorist/core/types';
 import { useSession } from '../auth/session.tsx';
 import { useFocusLoad } from '../lib/use-load.ts';
@@ -289,7 +289,7 @@ function SetupPrompt({ prefs, onPress }: { prefs: UserWithPreferencesWire; onPre
       </Text>
       <Text variant="heading">Choose what you want to follow.</Text>
       <Text tone="muted">
-        Pick your beats and a delivery time, and your first briefing will arrive at that hour.
+        Pick your beats, and your first briefing will arrive at {DELIVERY_LABEL}.
       </Text>
       <Button
         label="Choose beats"
@@ -317,7 +317,7 @@ function EmptyState({ prefs }: { prefs: UserWithPreferencesWire }) {
     >
       <Text variant="heading">Nothing to read yet</Text>
       <Text tone="muted" style={{ textAlign: 'center' }}>
-        Your first briefing arrives at {hourLabel(prefs.deliveryHour)} ({prefs.timezone}).
+        Your first briefing arrives at {DELIVERY_LABEL}.
       </Text>
     </View>
   );

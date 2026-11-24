@@ -1,8 +1,8 @@
 # Panorist (prototype)
 
 Personalized news briefings. Each user picks categories for a **daily** report
-and, separately, a **weekly** (local Monday) report. At their chosen local
-hour a cron job asks a search-grounded LLM for the news in each category,
+and, separately, a **weekly** (Monday) report. Every day at 07:00 Hong Kong
+time a cron job asks a search-grounded LLM for the news in each category,
 stores the report, and sends a web push. Readers sign in on the web or in the
 iOS/Android app to read past reports (with read/unread status) and edit
 preferences.
@@ -120,10 +120,12 @@ run the legacy script: `git show a711bcf:db/schema.sql`.)
 
 ### Scheduling
 
-`vercel.json` runs `/api/cron` daily at 00:00 UTC — 08:00 in Hong Kong, where
-all current users are (the Hobby plan allows one cron per day). The route
-matches users by **local** hour, so moving to hourly (`0 * * * *`, Pro plan)
-needs only a schedule change.
+`vercel.json` runs `/api/cron` daily at 23:00 UTC — 07:00 in Hong Kong (the
+Hobby plan allows one cron per day). Delivery is fixed for everyone at
+07:00 HKT (`packages/core/src/delivery.ts`), and the delivery time and time
+zone pickers are hidden; the stored `delivery_hour` and `timezone` are kept
+but not used for scheduling. Changing the time means updating both the
+constant and the schedule.
 
 ### Setting `CRON_SECRET` in Vercel
 
@@ -170,7 +172,7 @@ How to read it:
   var and redeploy, or a token mismatch).
 - **`auth_ok = true`** → the tick ran; `detail` reports the outcome —
   `processed=N succeeded=M failed=K skipped=S`, `no users due (utcHour=N)`
-  (the tick's hour doesn't match any user's `delivery_hour`), or the error.
+  (the tick isn't at 07:00 HKT, or every user is paused), or the error.
 
 Note an authorized trace row is stamped only when the tick finishes — if
 the function is killed before then, the row stays with a null `detail`,

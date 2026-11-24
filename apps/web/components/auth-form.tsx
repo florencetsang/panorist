@@ -116,7 +116,7 @@ export function AuthForm({ mode }: { mode: Mode }) {
       </h1>
       <p className="mt-2 text-ink-muted">
         {signUp
-          ? 'Create an account to choose your beats and delivery time.'
+          ? 'Create an account to choose your beats.'
           : 'Sign in to read your latest briefings.'}
       </p>
 

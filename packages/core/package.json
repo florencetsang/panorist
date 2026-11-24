@@ -8,6 +8,7 @@
     "./api": "./src/api.ts",
     "./brand": "./src/brand.ts",
     "./categories": "./src/categories.ts",
+    "./delivery": "./src/delivery.ts",
     "./design": "./src/design.ts",
     "./format": "./src/format.ts",
     "./markdown": "./src/markdown.ts",

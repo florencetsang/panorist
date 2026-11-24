@@ -1,12 +1,13 @@
 /**
  * Generate, store and announce the reports one user is due for right now:
- * the daily list every day, plus the weekly list on the user's local Monday.
+ * the daily list every day, plus the weekly list on Monday (DELIVERY_TIMEZONE).
  * Each frequency is a separate report, and one failing never blocks the other.
  */
 
 import 'server-only';
 
 import type { CategorySlug } from '@panorist/core/categories';
+import { DELIVERY_TIMEZONE } from '@panorist/core/delivery';
 import type { Frequency, ReportDraft, UserWithPreferences } from '@panorist/core/types';
 import { dbMarkdownCache } from '../db/markdown-cache.ts';
 import { saveReport } from '../db/reports.ts';
@@ -31,7 +32,7 @@ export function dueFrequencies(
   if (user.dailyCategories.length > 0) {
     due.push({ frequency: 'daily', categories: user.dailyCategories });
   }
-  if (user.weeklyCategories.length > 0 && isLocalMonday(user.timezone, now)) {
+  if (user.weeklyCategories.length > 0 && isLocalMonday(DELIVERY_TIMEZONE, now)) {
     due.push({ frequency: 'weekly', categories: user.weeklyCategories });
   }
   return due;
@@ -46,7 +47,7 @@ export async function generateDueReports(
   if (due.length === 0) return { status: 'nothing-due' };
   const generationDeps = deps ?? { llm: getLlmProvider(), cache: dbMarkdownCache };
 
-  const to = localDate(user.timezone, now);
+  const to = localDate(DELIVERY_TIMEZONE, now);
   const ids: Partial<Record<Frequency, string>> = {};
   for (const { frequency, categories } of due) {
     console.log(`[reports] generating ${frequency} report for user ${user.id}`);
