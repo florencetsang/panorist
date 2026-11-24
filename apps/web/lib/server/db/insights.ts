@@ -7,12 +7,7 @@
 import 'server-only';
 
 import { INSIGHT_PAGE_SIZE, isAnnotation } from '@panorist/core/insights';
-import type {
-  Annotation,
-  Insight,
-  InsightKind,
-  MarkdownCacheKey,
-} from '@panorist/core/types';
+import type { Annotation, Insight, InsightKind, MarkdownCacheKey } from '@panorist/core/types';
 import type { AnnotationStore } from '../insights/annotate.ts';
 import type {
   ExplanationIdentity,
