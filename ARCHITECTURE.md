@@ -15,7 +15,8 @@ Vercel Cron ──► GET /api/cron ──(per due user, bounded pool)──► 
 
 Browser (cookie session) ─┐
                            ├─► requireUser ─► /api/reports (GET, PATCH read), /api/reports/[id],
-Mobile app (bearer JWT) ───┘                  /api/preferences, /api/push/subscribe, /api/account (DELETE)
+Mobile app (bearer JWT) ───┘                  /api/preferences, /api/push/subscribe, /api/account (DELETE),
+                                              /api/features, /api/insights (+ /resolve, /[id])
 Both ──► /api/auth/* ──► Neon Auth (managed Better Auth, neon_auth schema)
 ```
 
@@ -27,7 +28,7 @@ Paths below are relative to `apps/web` unless they start with `apps/` or
 | Layer | Location | Rule |
 | --- | --- | --- |
 | Routes | `app/api/**/route.ts` | Parse and validate input, call one service, map the result to HTTP. No SQL or business logic. |
-| Services | `lib/server/reports`, `lib/server/cron` | Business logic. Dependencies (LLM, cache, fetch, clock) are passed in, so it can be unit-tested. |
+| Services | `lib/server/reports`, `lib/server/cron`, `lib/server/insights` | Business logic. Dependencies (LLM, cache, fetch, clock) are passed in, so it can be unit-tested. |
 | Adapters | `lib/server/db`, `lib/server/llm`, `lib/server/push.ts` | One module per table or external service. |
 | Config | `lib/server/env.ts` | The only place that reads `process.env` on the server. Lazy, so imports never fail. |
 | Shared | `packages/core` | Pure and isomorphic, used by server, web and mobile: types, validation, categories, markdown parsing, the typed API client, formatting, design tokens. |
@@ -149,7 +150,10 @@ theme), and mobile reads them directly through `useTheme()`.
 ## LLM provider
 
 - `LlmProvider` (`lib/server/llm/provider.ts`) has one method:
-  `complete({system, user}) → markdown`.
+  `complete({system, user}, options?) → text`. Options pick a `model`
+  (default `LLM_MODEL`), turn `search` off (default on) and request JSON via
+  a `jsonSchema` (Gemini `responseSchema`). Report generation uses the
+  defaults, so its requests are unchanged.
 - Gemini is the only implementation. It calls the **native**
   `models/{model}:generateContent` API with the `google_search` tool.
   - Google's OpenAI-compatible endpoint can't enable search grounding: any
@@ -166,6 +170,76 @@ theme), and mobile reads them directly through `useTheme()`.
     time budget.
 - To add a provider, implement `LlmProvider` and pick it in
   `lib/server/llm/index.ts`.
+
+## AI insights
+
+Two reader features on top of the briefing, plus a library:
+
+- **All I need to know** — key *events* (e.g. "Trump–Xi summit in
+  Washington") are highlighted; the action asks the search-grounded model
+  "Please summarize what I need to know about X."
+- **Tell me more** — *terms* worth learning (AIIB, CPI, hawkish policy path)
+  are highlighted; the action asks the lite model, without search, for a
+  short explainer.
+- **Free select** — a reader can also select any short phrase (web: text
+  selection; mobile: long-press a paragraph, then tap words). The server
+  classifies it as an event or term (or nothing), and only that action is
+  offered.
+- **Library** — every explanation a reader opens is saved to
+  `user_insights`; they can star, unstar and remove entries (`/library` on
+  web, a Library tab on mobile).
+
+**Detection (hybrid).** Highlights are detected *once per cached section*,
+not per user: after `generateReport` caches a section's markdown, a lite,
+JSON-mode call returns up to 5 events and 8 terms, stored in
+`markdown_annotations` keyed like `markdown_cache`. Every surface must appear
+verbatim in highlightable text (not links or code), so the clients can find
+it; keys are re-slugged and deduped server-side. Detection is best-effort: a
+failure never drops the section. `annotateBlocks` (`packages/core`) wraps the
+first occurrence of each surface in an `annotation` inline node for both
+renderers.
+
+**Shared cache.** Explanations are keyed by
+`(kind, canonical_key, bucket, prompt_version)` in `ai_explanations`, so every
+reader asking about the same thing shares one LLM call:
+
+- `bucket` is the Hong Kong date for events (news moves; one refresh a day)
+  and `static` for terms (bump `EXPLANATION_PROMPT_VERSION` to refresh).
+- Free selections go through `insight_aliases` (normalized surface → key, or
+  `reject`), seeded by highlight detection. Any spelling costs at most one
+  small classification call, ever, and lands on the same explanation key.
+- **Single flight:** the first request claims a `pending` row
+  (`INSERT … ON CONFLICT DO UPDATE` only for `failed` or stale rows); others
+  get `202` and the client polls (`api.explain`). Errors release the claim.
+- **Trust:** explanations are shared, so nothing a client sends reaches a
+  shared prompt. Only keys the server produced (a highlight or an alias) are
+  explained, always under one canonical name (`canonicalDisplayName`: the
+  earliest highlight's, else the earliest alias's), whatever name the client
+  sent. A selection must occur in the reader's own briefing, and the
+  classifier's context is taken from the server's copy of that briefing.
+
+**Entitlements and toggles.** `packages/core/src/features.ts` defines the
+features (`event_insights`, `term_insights`, `free_select`,
+`insight_library`) and what each plan gets (`users.plan`: `free` |
+`premium`; both get everything today). Effective features =
+plan features ∩ global env switches (`FEATURE_*`). `GET /api/features` tells
+clients what to show; every insight route re-checks on the server, and the
+report routes strip annotations of disabled kinds. With everything off the
+app behaves exactly as before, and with both highlight features off no
+detection runs during generation.
+
+**Cost controls.** Only uncached calls count against the per-user daily
+allowance (`PLAN_LIMITS`, `ai_usage`); cache hits and library reads are
+free. `AI_GLOBAL_DAILY_LIMIT` is an optional all-users cap. Term explainers
+can be pre-generated after detection with `AI_TERM_PREFETCH=1`.
+
+| Route | Purpose |
+| --- | --- |
+| `GET /api/features` | Plan, enabled features, today's allowance |
+| `POST /api/insights` | Explanation for `{kind, key, displayName, reportId?, sourceText?}` → 200, 202 (pending), 403, 404 (unknown target), 429 |
+| `POST /api/insights/resolve` | Classify a selection `{text, reportId}` from that briefing → target; 400 if not in it, 404 no such report, 422 nothing to explain |
+| `GET /api/insights?starred=1&before=<id>` | Library page |
+| `GET/PATCH/DELETE /api/insights/[id]` | One saved entry; PATCH `{starred}` |
 
 ## Cron fan-out
 
@@ -211,6 +285,11 @@ See `db/migrations/0001_baseline.sql` and later migrations.
   - Marking read keeps the first `read_at`.
   - The reader (web and mobile) marks a report read when it is opened;
     readers can mark it unread again.
+- **AI insights** (`0005`): `markdown_annotations` (highlights per cached
+  section), `insight_aliases`, `ai_explanations` (shared, one per
+  kind/key/bucket/version), `user_insights` (a user's library, starred via
+  `starred_at`; cascades with the user), `ai_usage` (daily call counts) and
+  `users.plan`.
 - Category slugs are enforced by CHECK constraints and must match
   `CATEGORY_SLUGS` (`packages/core/src/categories.ts`). A unit test keeps the two in
   sync, so adding a category means a migration **and** a code change.
@@ -222,7 +301,7 @@ See `db/migrations/0001_baseline.sql` and later migrations.
 
 | Kind | Where | Covers |
 | --- | --- | --- |
-| Unit (Vitest) | `test/`, `packages/core/test/` | Validation, periods and time zones, prompts, Gemini parsing, retries, report generation with an in-memory cache and a stub LLM, due-report orchestration (DB and push mocked), cron dispatch and deadline, `requireUser` (cookie vs bearer, 401/409) and the app-redirect allowlist, API client, formatting, markdown parser, SQL splitter, category ↔ migration parity |
+| Unit (Vitest) | `test/`, `packages/core/test/` | Validation, periods and time zones, prompts, Gemini parsing, retries, report generation with an in-memory cache and a stub LLM, AI insights (highlight validation, shared-explanation claims and quota, selection aliases), due-report orchestration (DB and push mocked), cron dispatch and deadline, `requireUser` (cookie vs bearer, 401/409) and the app-redirect allowlist, API client (incl. explain polling), formatting, markdown parser and highlighting, SQL splitter, category ↔ migration parity |
 | Mobile build | `npx expo export` in `apps/mobile` | The app bundles for iOS and Android; `tsc` checks it |
 | DB smoke | `scripts/smoke.ts` | Every DB helper against a real database, without destroying data |
 | Live LLM | `scripts/llm-live.ts` | One real provider round-trip |

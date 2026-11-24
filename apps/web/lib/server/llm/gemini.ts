@@ -4,7 +4,7 @@
  * can't enable search grounding — see ARCHITECTURE.md.
  */
 
-import type { LlmProvider, Prompt } from './provider.ts';
+import type { CompletionOptions, LlmProvider, Prompt } from './provider.ts';
 import { DEFAULT_RETRY, fetchTextWithRetry, snippet, type RetryOptions } from './transport.ts';
 
 export interface GeminiConfig {
@@ -15,15 +15,16 @@ export interface GeminiConfig {
 }
 
 export function createGeminiProvider(config: GeminiConfig): LlmProvider {
-  const url = `${config.baseUrl.replace(/\/+$/, '')}/models/${encodeURIComponent(config.model)}:generateContent`;
+  const baseUrl = config.baseUrl.replace(/\/+$/, '');
   return {
-    async complete(prompt: Prompt): Promise<string> {
+    async complete(prompt: Prompt, options: CompletionOptions = {}): Promise<string> {
+      const model = options.model ?? config.model;
       const raw = await fetchTextWithRetry(
-        url,
+        `${baseUrl}/models/${encodeURIComponent(model)}:generateContent`,
         {
           method: 'POST',
           headers: { 'x-goog-api-key': config.apiKey, 'Content-Type': 'application/json' },
-          body: JSON.stringify(buildRequestBody(prompt)),
+          body: JSON.stringify(buildRequestBody(prompt, options)),
         },
         config.retry ?? DEFAULT_RETRY,
       );
@@ -32,11 +33,20 @@ export function createGeminiProvider(config: GeminiConfig): LlmProvider {
   };
 }
 
-export function buildRequestBody(prompt: Prompt): Record<string, unknown> {
+export function buildRequestBody(
+  prompt: Prompt,
+  options: CompletionOptions = {},
+): Record<string, unknown> {
   return {
     systemInstruction: { parts: [{ text: prompt.system }] },
     contents: [{ role: 'user', parts: [{ text: prompt.user }] }],
-    tools: [{ google_search: {} }],
+    ...(options.search !== false && { tools: [{ google_search: {} }] }),
+    ...(options.jsonSchema && {
+      generationConfig: {
+        responseMimeType: 'application/json',
+        responseSchema: options.jsonSchema,
+      },
+    }),
   };
 }
 

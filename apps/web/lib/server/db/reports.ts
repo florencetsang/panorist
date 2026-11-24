@@ -54,19 +54,28 @@ export async function getReportsForUser(userId: string, limit = 60): Promise<Rep
   return rows as Report[];
 }
 
-/** A report's pointers resolved into [{category, markdown}]; a missing cache row yields ''. */
+/**
+ * A report's pointers resolved into [{category, markdown, annotations}]; a
+ * missing cache row yields '' and missing highlights []. Callers filter
+ * annotations to the user's entitlements (lib/server/features.ts).
+ */
 const TOPICS_COLUMN = `
   COALESCE((
     SELECT jsonb_agg(
              jsonb_build_object(
                'category', item->>'category',
-               'markdown', COALESCE(mc.markdown, '')
+               'markdown', COALESCE(mc.markdown, ''),
+               'annotations', COALESCE(ma.annotations, '[]'::jsonb)
              ) ORDER BY ord)
     FROM jsonb_array_elements(r.content) WITH ORDINALITY AS e(item, ord)
     LEFT JOIN markdown_cache mc
       ON mc.category = item->>'category'
      AND mc.frequency = item->>'frequency'
      AND mc.to_date = (item->>'to')::date
+    LEFT JOIN markdown_annotations ma
+      ON ma.category = mc.category
+     AND ma.frequency = mc.frequency
+     AND ma.to_date = mc.to_date
   ), '[]'::jsonb) AS topics
 `;
 

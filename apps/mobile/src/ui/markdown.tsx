@@ -1,17 +1,48 @@
 /** Native renderer for the model-written markdown AST from @panorist/core. */
 
 import * as WebBrowser from 'expo-web-browser';
-import { Fragment, useMemo } from 'react';
+import { createContext, Fragment, useContext, useMemo } from 'react';
 import { Text as RNText, View } from 'react-native';
 
-import { parseMarkdown, type Block, type Inline, type List } from '@panorist/core/markdown';
+import {
+  annotateBlocks,
+  inlineText,
+  parseMarkdown,
+  type Block,
+  type Inline,
+  type List,
+} from '@panorist/core/markdown';
+import { INSIGHT_ACTION_LABEL } from '@panorist/core/insights';
+import type { Annotation } from '@panorist/core/types';
 import { Rule, Text } from './primitives.tsx';
 import { font, radius, space, useTheme } from './theme.ts';
 
 const isWebUrl = (href: string) => /^https?:\/\//i.test(href);
 
+interface Handlers {
+  onAnnotation?: (annotation: Annotation) => void;
+  /** Long-press on a paragraph or list item, with its plain text. */
+  onLongPressText?: (text: string) => void;
+}
+
+const HandlersContext = createContext<Handlers>({});
+
+/** Long-pressable body text, for picking words to explain. */
+function BodyText({ nodes }: { nodes: Inline[] }) {
+  const { onLongPressText } = useContext(HandlersContext);
+  return (
+    <Text
+      variant="body"
+      onLongPress={onLongPressText ? () => onLongPressText(inlineText(nodes)) : undefined}
+    >
+      <Inlines nodes={nodes} />
+    </Text>
+  );
+}
+
 function Inlines({ nodes }: { nodes: Inline[] }) {
   const { color } = useTheme();
+  const { onAnnotation } = useContext(HandlersContext);
   return (
     <>
       {nodes.map((node, i) => {
@@ -58,6 +89,29 @@ function Inlines({ nodes }: { nodes: Inline[] }) {
                 <Inlines nodes={node.children} />
               </RNText>
             );
+          case 'annotation': {
+            const { annotation } = node;
+            if (!onAnnotation) return <Inlines key={i} nodes={node.children} />;
+            return (
+              <RNText
+                key={i}
+                accessibilityRole="button"
+                accessibilityHint={INSIGHT_ACTION_LABEL[annotation.kind]}
+                onPress={() => onAnnotation(annotation)}
+                style={
+                  annotation.kind === 'event'
+                    ? { backgroundColor: color.accentSoft }
+                    : {
+                        textDecorationLine: 'underline',
+                        textDecorationStyle: 'dotted',
+                        textDecorationColor: color.inkFaint,
+                      }
+                }
+              >
+                <Inlines nodes={node.children} />
+              </RNText>
+            );
+          }
         }
       })}
     </>
@@ -74,9 +128,7 @@ function ListView({ list, depth = 0 }: { list: List; depth?: number }) {
             {list.ordered ? `${i + 1}.` : '•'}
           </Text>
           <View style={{ flex: 1 }}>
-            <Text variant="body">
-              <Inlines nodes={item.content} />
-            </Text>
+            <BodyText nodes={item.content} />
             {item.sublist && <ListView list={item.sublist} depth={depth + 1} />}
           </View>
         </View>
@@ -98,11 +150,7 @@ function BlockView({ block }: { block: Block }) {
         </Text>
       );
     case 'paragraph':
-      return (
-        <Text variant="body">
-          <Inlines nodes={block.content} />
-        </Text>
-      );
+      return <BodyText nodes={block.content} />;
     case 'list':
       return <ListView list={block} />;
     case 'code':
@@ -118,13 +166,34 @@ function BlockView({ block }: { block: Block }) {
   }
 }
 
-export function Markdown({ source }: { source: string }) {
-  const blocks = useMemo(() => parseMarkdown(source), [source]);
+/**
+ * With `annotations` and `onAnnotation`, AI highlights become tappable; with
+ * `onLongPressText`, long-pressing a paragraph hands over its text.
+ */
+export function Markdown({
+  source,
+  annotations,
+  onAnnotation,
+  onLongPressText,
+}: {
+  source: string;
+  annotations?: readonly Annotation[];
+} & Handlers) {
+  const blocks = useMemo(() => {
+    const parsed = parseMarkdown(source);
+    return annotations && onAnnotation ? annotateBlocks(parsed, annotations) : parsed;
+  }, [source, annotations, onAnnotation]);
+  const handlers = useMemo(
+    () => ({ onAnnotation, onLongPressText }),
+    [onAnnotation, onLongPressText],
+  );
   return (
-    <View style={{ gap: space(5) }}>
-      {blocks.map((block, i) => (
-        <BlockView key={i} block={block} />
-      ))}
-    </View>
+    <HandlersContext.Provider value={handlers}>
+      <View style={{ gap: space(5) }}>
+        {blocks.map((block, i) => (
+          <BlockView key={i} block={block} />
+        ))}
+      </View>
+    </HandlersContext.Provider>
   );
 }

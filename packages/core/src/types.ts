@@ -4,6 +4,7 @@
  */
 
 import type { CategorySlug } from './categories.ts';
+import type { FeatureKey, Plan } from './features.ts';
 
 export type Frequency = 'daily' | 'weekly';
 
@@ -64,6 +65,70 @@ export interface MarkdownCache {
 export interface TopicContent {
   category: string;
   markdown: string;
+  /** AI-detected highlights, filtered to the kinds the user is entitled to. */
+  annotations?: Annotation[];
+}
+
+// ---------------------------------------------------------------------------
+// AI insights
+// ---------------------------------------------------------------------------
+
+/** event → "All I need to know"; term → "Tell me more". */
+export type InsightKind = 'event' | 'term';
+
+/**
+ * An AI-detected highlight in a section's markdown. `surface` occurs verbatim
+ * in the markdown; `key` is the canonical, cross-user cache identity.
+ */
+export interface Annotation {
+  kind: InsightKind;
+  surface: string;
+  key: string;
+  displayName: string;
+}
+
+/** What to explain: a highlight, or a reader's selection resolved by the server. */
+export interface InsightTarget {
+  kind: InsightKind;
+  key: string;
+  displayName: string;
+}
+
+/** POST /api/insights body. */
+export interface InsightRequest extends InsightTarget {
+  /** The briefing it was opened from, linked in the library. */
+  reportId?: string;
+  /** The exact text the reader clicked or selected. */
+  sourceText?: string;
+}
+
+/**
+ * An explanation as the reader sees it. `id` is the library entry, or null
+ * when the library feature is off (nothing was saved).
+ */
+export interface Insight extends InsightTarget {
+  id: string | null;
+  markdown: string;
+  /** When the shared explanation was generated. */
+  generatedAt: Date;
+  reportId: string | null;
+  sourceText: string | null;
+  starredAt: Date | null;
+  savedAt: Date | null;
+}
+
+export type InsightWire = Omit<Insight, 'generatedAt' | 'starredAt' | 'savedAt'> & {
+  generatedAt: string;
+  starredAt: string | null;
+  savedAt: string | null;
+};
+
+/** GET /api/features response. */
+export interface FeaturesWire {
+  plan: Plan;
+  features: FeatureKey[];
+  /** Uncached AI calls allowed and used today (Hong Kong day). */
+  dailyAiCalls: { limit: number; used: number };
 }
 
 /** A generated report, ready to store. */

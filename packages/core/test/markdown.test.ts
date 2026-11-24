@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { parseInline, parseMarkdown } from '../src/markdown.ts';
+import { markdownParagraphs, parseInline, parseMarkdown } from '../src/markdown.ts';
 
 describe('parseInline', () => {
   it('parses marks and safe links', () => {
@@ -51,5 +51,12 @@ describe('parseMarkdown', () => {
         { content: [{ type: 'text', text: 'second' }], sublist: null },
       ],
     });
+  });
+});
+
+describe('markdownParagraphs', () => {
+  it('returns the visible text of headings, paragraphs and nested list items', () => {
+    const md = '## The **Fed**\n\nRates [held](https://x.test).\n\n- One\n  - Two *deep*\n\n---';
+    expect(markdownParagraphs(md)).toEqual(['The Fed', 'Rates held.', 'One', 'Two deep']);
   });
 });

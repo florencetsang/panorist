@@ -2,17 +2,22 @@
 
 /**
  * One briefing as a long-form article: a section per topic with a sticky
- * topic index. Opening an unread briefing marks it read.
+ * topic index. Opening an unread briefing marks it read. With AI insights on,
+ * highlighted events and terms (and, with free-select, any short selection)
+ * open an explanation panel.
  */
 
 import Link from 'next/link';
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { categoryLabel } from '@panorist/core/categories';
 import { deliveredLabel, frequencyLabel, periodLabel, readingMinutes } from '@panorist/core/format';
-import type { HydratedReportWire } from '@panorist/core/types';
+import type { Annotation, HydratedReportWire } from '@panorist/core/types';
 import { ApiError, api } from '../lib/client/api.ts';
+import { useFeatures } from '../lib/client/features.ts';
+import { InsightPanel, type PanelTarget } from './insight-panel.tsx';
 import { Markdown } from './markdown.tsx';
+import { SelectionExplainer } from './selection-explainer.tsx';
 import { Button, ButtonLink, Notice, Skeleton } from './ui.tsx';
 
 type State =
@@ -24,6 +29,19 @@ type State =
 export function Reader({ reportId }: { reportId: string }) {
   const [state, setState] = useState<State>({ status: 'loading' });
   const [saving, setSaving] = useState(false);
+  const [target, setTarget] = useState<PanelTarget | null>(null);
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const { has } = useFeatures();
+  const openAnnotation = useCallback(
+    (annotation: Annotation) =>
+      setTarget({
+        kind: annotation.kind,
+        key: annotation.key,
+        displayName: annotation.displayName,
+      }),
+    [],
+  );
+  const closePanel = useCallback(() => setTarget(null), []);
 
   useEffect(() => {
     let cancelled = false;
@@ -137,24 +155,42 @@ export function Reader({ reportId }: { reportId: string }) {
         </nav>
       )}
 
-      {topics.length === 0 ? (
-        <p className="mt-10 text-ink-muted">This briefing’s content is no longer available.</p>
-      ) : (
-        topics.map((t, i) => (
-          <section key={t.category} id={anchor(t.category)} className="scroll-mt-32 pt-12">
-            <div className="flex items-baseline gap-3">
-              <span className="font-serif text-lg text-accent tabular-nums">
-                {String(i + 1).padStart(2, '0')}
-              </span>
-              <h2 className="font-serif text-3xl font-medium tracking-tight">
-                {categoryLabel(t.category)}
-              </h2>
-            </div>
-            <div className="mt-6">
-              <Markdown source={t.markdown} />
-            </div>
-          </section>
-        ))
+      <div ref={bodyRef}>
+        {topics.length === 0 ? (
+          <p className="mt-10 text-ink-muted">This briefing’s content is no longer available.</p>
+        ) : (
+          topics.map((t, i) => (
+            <section key={t.category} id={anchor(t.category)} className="scroll-mt-32 pt-12">
+              <div className="flex items-baseline gap-3">
+                <span className="font-serif text-lg text-accent tabular-nums">
+                  {String(i + 1).padStart(2, '0')}
+                </span>
+                <h2 className="font-serif text-3xl font-medium tracking-tight">
+                  {categoryLabel(t.category)}
+                </h2>
+              </div>
+              <div className="mt-6">
+                <Markdown
+                  source={t.markdown}
+                  annotations={t.annotations}
+                  onAnnotation={openAnnotation}
+                />
+              </div>
+            </section>
+          ))
+        )}
+      </div>
+
+      {has('free_select') && (
+        <SelectionExplainer container={bodyRef} reportId={report.id} onResolved={setTarget} />
+      )}
+      {target && (
+        <InsightPanel
+          key={`${target.kind}:${target.key}`}
+          target={target}
+          reportId={report.id}
+          onClose={closePanel}
+        />
       )}
 
       <footer className="mt-16 border-t border-rule pt-8 text-center">
