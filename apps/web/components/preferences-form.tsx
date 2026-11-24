@@ -2,28 +2,22 @@
 
 /** What to follow, and when to deliver it. */
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 
 import { CATEGORY_LABELS, CATEGORY_SLUGS, type CategorySlug } from '@panorist/core/categories';
-import { hourLabel } from '@panorist/core/format';
-import { deviceTimeZone, timeZoneLabel, timeZoneOptions } from '@panorist/core/timezones';
+import { DELIVERY_LABEL } from '@panorist/core/delivery';
 import type { PreferencesPatch, UserWithPreferencesWire } from '@panorist/core/types';
 import { api } from '../lib/client/api.ts';
-import { useClientValue } from '../lib/client/use-client-value.ts';
 import { Button, Notice, Skeleton } from './ui.tsx';
 
 interface Draft {
   dailyCategories: CategorySlug[];
   weeklyCategories: CategorySlug[];
-  deliveryHour: number;
-  timezone: string;
 }
 
 const toDraft = (p: UserWithPreferencesWire): Draft => ({
   dailyCategories: p.dailyCategories,
   weeklyCategories: p.weeklyCategories,
-  deliveryHour: p.deliveryHour,
-  timezone: p.timezone,
 });
 
 const sameSet = (a: readonly string[], b: readonly string[]) =>
@@ -35,8 +29,6 @@ function diff(saved: Draft, draft: Draft): PreferencesPatch {
     patch.dailyCategories = draft.dailyCategories;
   if (!sameSet(saved.weeklyCategories, draft.weeklyCategories))
     patch.weeklyCategories = draft.weeklyCategories;
-  if (saved.deliveryHour !== draft.deliveryHour) patch.deliveryHour = draft.deliveryHour;
-  if (saved.timezone !== draft.timezone) patch.timezone = draft.timezone;
   return patch;
 }
 
@@ -47,7 +39,6 @@ export function PreferencesForm() {
   const [draft, setDraft] = useState<Draft | null>(null);
   const [loadError, setLoadError] = useState(false);
   const [status, setStatus] = useState<Status>('idle');
-  const device = useClientValue<string | null>(deviceTimeZone, null);
 
   useEffect(() => {
     api.getPreferences().then(
@@ -61,9 +52,6 @@ export function PreferencesForm() {
       },
     );
   }, []);
-
-  const timezone = draft?.timezone;
-  const zones = useMemo(() => timeZoneOptions(timezone), [timezone]);
 
   if (loadError) return <Notice>We couldn’t load your preferences. Refresh to try again.</Notice>;
   if (!draft || !saved) return <PreferencesSkeleton />;
@@ -134,47 +122,7 @@ export function PreferencesForm() {
         />
       </Section>
 
-      <Section title="Delivery" description="Both editions arrive at the same local hour.">
-        <div className="grid gap-5 sm:grid-cols-2">
-          <label className="block">
-            <span className="text-sm font-medium">Time</span>
-            <select
-              value={draft.deliveryHour}
-              onChange={(e) => update({ deliveryHour: Number(e.target.value) })}
-              className="mt-1.5 w-full rounded-xl border border-rule bg-surface px-3 py-2.5 focus:border-ink focus:outline-none"
-            >
-              {Array.from({ length: 24 }, (_, h) => (
-                <option key={h} value={h}>
-                  {hourLabel(h)}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="block">
-            <span className="text-sm font-medium">Time zone</span>
-            <select
-              value={draft.timezone}
-              onChange={(e) => update({ timezone: e.target.value })}
-              className="mt-1.5 w-full rounded-xl border border-rule bg-surface px-3 py-2.5 focus:border-ink focus:outline-none"
-            >
-              {zones.map((z) => (
-                <option key={z} value={z}>
-                  {timeZoneLabel(z)}
-                </option>
-              ))}
-            </select>
-            {device && device !== draft.timezone && (
-              <button
-                type="button"
-                onClick={() => update({ timezone: device })}
-                className="mt-2 text-sm text-accent underline-offset-2 hover:underline"
-              >
-                Use this device’s time zone ({timeZoneLabel(device)})
-              </button>
-            )}
-          </label>
-        </div>
-      </Section>
+      <Section title="Delivery" description={`Both editions arrive at ${DELIVERY_LABEL}.`} />
 
       <div className="sticky bottom-0 -mx-5 mt-10 border-t border-rule bg-paper/90 px-5 py-4 backdrop-blur sm:-mx-8 sm:px-8">
         <div className="flex flex-wrap items-center justify-between gap-3">
@@ -187,7 +135,7 @@ export function PreferencesForm() {
                   ? 'No topics selected — deliveries are paused.'
                   : dirty
                     ? 'You have unsaved changes.'
-                    : `Next editions at ${hourLabel(draft.deliveryHour)}.`}
+                    : `Next editions at ${DELIVERY_LABEL}.`}
           </p>
           <div className="flex gap-2">
             {dirty && (
@@ -214,7 +162,7 @@ function Section({
   title: string;
   description: string;
   count?: number;
-  children: React.ReactNode;
+  children?: React.ReactNode;
 }) {
   return (
     <section className="mt-12 border-t border-ink pt-6">
@@ -227,7 +175,7 @@ function Section({
         )}
       </div>
       <p className="mt-1 text-ink-muted">{description}</p>
-      <div className="mt-5">{children}</div>
+      {children && <div className="mt-5">{children}</div>}
     </section>
   );
 }

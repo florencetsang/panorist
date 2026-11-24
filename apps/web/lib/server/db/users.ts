@@ -2,6 +2,7 @@
 
 import 'server-only';
 
+import { DELIVERY_HOUR, DELIVERY_TIMEZONE } from '@panorist/core/delivery';
 import type {
   PreferencesPatch,
   PushSubscriptionJSON,
@@ -31,11 +32,10 @@ export async function getUserWithPreferences(userId: string): Promise<UserWithPr
 /**
  * Users due for at least one report at `instant` (truncated to the hour).
  *
- * `delivery_hour` is a local wall-clock hour, so Postgres converts the
- * instant into each user's timezone (`AT TIME ZONE` handles DST and
- * half-hour offsets). Daily lists are due every day; weekly lists only on
- * the user's local Monday (isodow = 1). Paused users (both lists empty)
- * never match.
+ * Everyone is delivered at the fixed DELIVERY_HOUR in DELIVERY_TIMEZONE
+ * (per-user `delivery_hour` and `timezone` are ignored). Daily lists are due
+ * every day; weekly lists only on Monday in that zone (isodow = 1). Paused
+ * users (both lists empty) never match.
  */
 export async function getUsersDueForReport(instant: Date): Promise<UserWithPreferences[]> {
   const hour = new Date(instant);
@@ -45,9 +45,9 @@ export async function getUsersDueForReport(instant: Date): Promise<UserWithPrefe
     FROM preferences p
     JOIN users u ON u.id = p.user_id
     CROSS JOIN LATERAL (
-      SELECT (${hour.toISOString()}::timestamptz AT TIME ZONE u.timezone) AS local_time
+      SELECT (${hour.toISOString()}::timestamptz AT TIME ZONE ${DELIVERY_TIMEZONE}) AS local_time
     ) lt
-    WHERE p.delivery_hour = extract(hour FROM lt.local_time)::smallint
+    WHERE extract(hour FROM lt.local_time) = ${DELIVERY_HOUR}
       AND (
         cardinality(p.daily_categories) > 0
         OR (extract(isodow FROM lt.local_time) = 1 AND cardinality(p.weekly_categories) > 0)

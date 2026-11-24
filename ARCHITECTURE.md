@@ -106,19 +106,23 @@ theme), and mobile reads them directly through `useTheme()`.
 
 ## Scheduling and time zones
 
-- A user is **due** when the local hour in their IANA timezone equals
-  `delivery_hour` **and** at least one list wants a report: `daily_categories`
-  every day, or `weekly_categories` on their local Monday. Both lists empty
-  means paused, and a paused user is never due.
-- Postgres does the timezone conversion (`AT TIME ZONE`), so DST and
-  half-hour zones are handled without date maths in app code.
+- Delivery is **fixed at 07:00 Hong Kong time for everyone**
+  (`DELIVERY_HOUR` / `DELIVERY_TIMEZONE` in `packages/core/src/delivery.ts`),
+  because the Vercel Hobby plan allows only one cron a day. The per-user
+  `delivery_hour` and `timezone` are still stored but ignored by scheduling,
+  and their pickers are hidden in the apps.
+- A user is **due** when the tick's hour in Hong Kong equals `DELIVERY_HOUR`
+  **and** at least one list wants a report: `daily_categories` every day, or
+  `weekly_categories` on Monday (Hong Kong). Both lists empty means paused,
+  and a paused user is never due.
+- Postgres does the timezone conversion (`AT TIME ZONE`).
   `getUsersDueForReport(instant)` truncates the instant to the hour, which
   keeps a late-firing cron on the correct hour.
-- On the user's local Monday they get **two separate reports**, daily and
-  weekly, both at the same hour. A failure in one does not block the other.
-- **Report windows** (`lib/server/reports/period.ts`):
-  - daily covers the local date;
-  - weekly covers the 7 days ending on the local date, inclusive.
+- On Monday they get **two separate reports**, daily and weekly, both at the
+  same hour. A failure in one does not block the other.
+- **Report windows** (`lib/server/reports/period.ts`), dated in Hong Kong:
+  - daily covers the Hong Kong date;
+  - weekly covers the 7 days ending on that date, inclusive.
   - Both are stored as whole UTC calendar days in `period_start`/`period_end`.
 
 ## Report generation and the markdown cache

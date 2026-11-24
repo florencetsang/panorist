@@ -192,7 +192,7 @@
               "host": ["{{baseUrl}}"],
               "path": ["api", "preferences"]
             },
-            "description": "Partial update; returns the stored row. Allowed patch fields: deliveryHour (0–23), dailyCategories, weeklyCategories (arrays of: world, asia_pacific, hong_kong, economics, sport, entertainment, lifestyle, technology), pushSubscription (object or null). Unknown fields → 400. Both lists empty = paused.",
+            "description": "Partial update; returns the stored row. Allowed patch fields: deliveryHour (0–23; stored but ignored — delivery is fixed at 07:00 HKT), dailyCategories, weeklyCategories (arrays of: world, asia_pacific, hong_kong, economics, sport, entertainment, lifestyle, technology), pushSubscription (object or null). Unknown fields → 400. Both lists empty = paused.",
             "body": {
               "mode": "raw",
               "raw": "{\n  \"patch\": {\n    \"deliveryHour\": 8,\n    \"dailyCategories\": [\n      \"world\",\n      \"economics\"\n    ],\n    \"weeklyCategories\": [\n      \"hong_kong\"\n    ]\n  }\n}",
@@ -663,7 +663,7 @@
               "host": ["{{baseUrl}}"],
               "path": ["api", "cron"]
             },
-            "description": "What Vercel Cron calls. Finds users whose local hour equals delivery_hour right now and calls /api/generate for each. Returns {processed, succeeded, failed, skipped}. Writes a cron_runs row."
+            "description": "What Vercel Cron calls. At 07:00 Hong Kong time (the fixed delivery time) finds users with at least one non-empty list and calls /api/generate for each. Returns {processed, succeeded, failed, skipped}. Writes a cron_runs row."
           },
           "event": [
             {

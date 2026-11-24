@@ -1,28 +1,23 @@
-import { useMemo, useState } from 'react';
-import { FlatList, Modal, Pressable, ScrollView, TextInput, View } from 'react-native';
+import { useState } from 'react';
+import { ScrollView, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { CATEGORY_LABELS, CATEGORY_SLUGS, type CategorySlug } from '@panorist/core/categories';
-import { hourLabel } from '@panorist/core/format';
-import { deviceTimeZone, timeZoneLabel, timeZoneOptions } from '@panorist/core/timezones';
+import { DELIVERY_LABEL } from '@panorist/core/delivery';
 import type { PreferencesPatch, UserWithPreferencesWire } from '@panorist/core/types';
 import { useSession } from '../auth/session.tsx';
 import { useFocusLoad } from '../lib/use-load.ts';
 import { Button, Chip, Loading, Notice, Rule, Text } from '../ui/primitives.tsx';
-import { font, radius, space, useTheme } from '../ui/theme.ts';
+import { space, useTheme } from '../ui/theme.ts';
 
 interface Draft {
   dailyCategories: CategorySlug[];
   weeklyCategories: CategorySlug[];
-  deliveryHour: number;
-  timezone: string;
 }
 
 const toDraft = (p: UserWithPreferencesWire): Draft => ({
   dailyCategories: p.dailyCategories,
   weeklyCategories: p.weeklyCategories,
-  deliveryHour: p.deliveryHour,
-  timezone: p.timezone,
 });
 
 const sameSet = (a: readonly string[], b: readonly string[]) =>
@@ -34,8 +29,6 @@ function diff(saved: Draft, draft: Draft): PreferencesPatch {
     patch.dailyCategories = draft.dailyCategories;
   if (!sameSet(saved.weeklyCategories, draft.weeklyCategories))
     patch.weeklyCategories = draft.weeklyCategories;
-  if (saved.deliveryHour !== draft.deliveryHour) patch.deliveryHour = draft.deliveryHour;
-  if (saved.timezone !== draft.timezone) patch.timezone = draft.timezone;
   return patch;
 }
 
@@ -64,8 +57,6 @@ function PreferencesForm({ initial }: { initial: Draft }) {
   const [saved, setSaved] = useState(initial);
   const [draft, setDraft] = useState(initial);
   const [status, setStatus] = useState<Status>('idle');
-  const [pickingZone, setPickingZone] = useState(false);
-  const device = deviceTimeZone();
 
   const patch = diff(saved, draft);
   const dirty = Object.keys(patch).length > 0;
@@ -104,7 +95,7 @@ function PreferencesForm({ initial }: { initial: Draft }) {
           ? 'No topics selected — deliveries are paused.'
           : dirty
             ? 'You have unsaved changes.'
-            : `Next editions at ${hourLabel(draft.deliveryHour)}.`;
+            : `Next editions at ${DELIVERY_LABEL}.`;
 
   return (
     <SafeAreaView edges={['top']} style={{ flex: 1, backgroundColor: color.paper }}>
@@ -141,53 +132,7 @@ function PreferencesForm({ initial }: { initial: Draft }) {
           />
         </Section>
 
-        <Section title="Delivery" description="Both editions arrive at the same local hour.">
-          <Text variant="small" style={{ fontFamily: font.sansMedium }}>
-            Time
-          </Text>
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            contentContainerStyle={{ gap: space(2) }}
-            contentOffset={{ x: Math.max(0, draft.deliveryHour - 2) * 78, y: 0 }}
-          >
-            {Array.from({ length: 24 }, (_, h) => (
-              <Chip
-                key={h}
-                label={hourLabel(h)}
-                selected={draft.deliveryHour === h}
-                onPress={() => update({ deliveryHour: h })}
-              />
-            ))}
-          </ScrollView>
-
-          <Text variant="small" style={{ fontFamily: font.sansMedium, marginTop: space(4) }}>
-            Time zone
-          </Text>
-          <Pressable
-            accessibilityRole="button"
-            onPress={() => setPickingZone(true)}
-            style={{
-              borderWidth: 1,
-              borderColor: color.rule,
-              backgroundColor: color.surface,
-              borderRadius: radius.md,
-              padding: space(4),
-              flexDirection: 'row',
-              justifyContent: 'space-between',
-            }}
-          >
-            <Text>{timeZoneLabel(draft.timezone)}</Text>
-            <Text tone="faint">Change</Text>
-          </Pressable>
-          {device !== draft.timezone && (
-            <Pressable onPress={() => update({ timezone: device })} hitSlop={8}>
-              <Text variant="small" tone="accent">
-                Use this device’s time zone ({timeZoneLabel(device)})
-              </Text>
-            </Pressable>
-          )}
-        </Section>
+        <Section title="Delivery" description={`Both editions arrive at ${DELIVERY_LABEL}.`} />
       </ScrollView>
 
       <View
@@ -220,16 +165,6 @@ function PreferencesForm({ initial }: { initial: Draft }) {
           />
         </View>
       </View>
-
-      <ZonePicker
-        visible={pickingZone}
-        current={draft.timezone}
-        onClose={() => setPickingZone(false)}
-        onPick={(zone) => {
-          update({ timezone: zone });
-          setPickingZone(false);
-        }}
-      />
     </SafeAreaView>
   );
 }
@@ -243,7 +178,7 @@ function Section({
   title: string;
   description: string;
   count?: number;
-  children: React.ReactNode;
+  children?: React.ReactNode;
 }) {
   return (
     <View style={{ gap: space(3) }}>
@@ -259,7 +194,7 @@ function Section({
         )}
       </View>
       <Text tone="muted">{description}</Text>
-      <View style={{ gap: space(2), marginTop: space(1) }}>{children}</View>
+      {children && <View style={{ gap: space(2), marginTop: space(1) }}>{children}</View>}
     </View>
   );
 }
@@ -282,86 +217,5 @@ function Picker({
         />
       ))}
     </View>
-  );
-}
-
-function ZonePicker({
-  visible,
-  current,
-  onClose,
-  onPick,
-}: {
-  visible: boolean;
-  current: string;
-  onClose: () => void;
-  onPick: (zone: string) => void;
-}) {
-  const { color } = useTheme();
-  const [query, setQuery] = useState('');
-  const zones = useMemo(() => {
-    const q = query.trim().toLowerCase().replace(/\s+/g, '_');
-    return timeZoneOptions(current).filter((z) => !q || z.toLowerCase().includes(q));
-  }, [query, current]);
-
-  return (
-    <Modal
-      visible={visible}
-      animationType="slide"
-      presentationStyle="pageSheet"
-      onRequestClose={onClose}
-    >
-      <SafeAreaView style={{ flex: 1, backgroundColor: color.paper }}>
-        <View style={{ padding: space(5), gap: space(4) }}>
-          <View
-            style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}
-          >
-            <Text variant="title">Time zone</Text>
-            <Pressable onPress={onClose} hitSlop={10}>
-              <Text tone="muted" style={{ fontFamily: font.sansMedium }}>
-                Done
-              </Text>
-            </Pressable>
-          </View>
-          <TextInput
-            value={query}
-            onChangeText={setQuery}
-            placeholder="Search cities"
-            placeholderTextColor={color.inkFaint}
-            autoCorrect={false}
-            style={{
-              borderWidth: 1,
-              borderColor: color.rule,
-              backgroundColor: color.surface,
-              borderRadius: radius.md,
-              padding: space(3.5),
-              fontFamily: font.sans,
-              fontSize: 16,
-              color: color.ink,
-            }}
-          />
-        </View>
-        <FlatList
-          data={zones}
-          keyExtractor={(z) => z}
-          keyboardShouldPersistTaps="handled"
-          ItemSeparatorComponent={() => <Rule style={{ marginLeft: space(5) }} />}
-          renderItem={({ item }) => (
-            <Pressable
-              onPress={() => onPick(item)}
-              style={({ pressed }) => ({
-                paddingHorizontal: space(5),
-                paddingVertical: space(3.5),
-                flexDirection: 'row',
-                justifyContent: 'space-between',
-                backgroundColor: pressed ? color.sunken : 'transparent',
-              })}
-            >
-              <Text>{timeZoneLabel(item)}</Text>
-              {item === current && <Text tone="accent">✓</Text>}
-            </Pressable>
-          )}
-        />
-      </SafeAreaView>
-    </Modal>
   );
 }
