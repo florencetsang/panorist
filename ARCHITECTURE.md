@@ -15,7 +15,7 @@ Vercel Cron ──► GET /api/cron ──(per due user, bounded pool)──► 
 
 Browser (cookie session) ─┐
                            ├─► requireUser ─► /api/reports (GET, PATCH read), /api/reports/[id],
-Mobile app (bearer JWT) ───┘                  /api/preferences, /api/push/subscribe
+Mobile app (bearer JWT) ───┘                  /api/preferences, /api/push/subscribe, /api/account (DELETE)
 Both ──► /api/auth/* ──► Neon Auth (managed Better Auth, neon_auth schema)
 ```
 
@@ -82,6 +82,19 @@ Methods: email + password (verified with an emailed code) and Google.
 - New accounts start with no topics (paused); the UI prompts to choose some.
 - Sign-out ends the session. An already-issued mobile JWT stays valid until
   it expires (at most 15 minutes).
+- **Account deletion.** `DELETE /api/account` (web: Preferences, type
+  `DELETE` to confirm; mobile: Account tab) runs `deleteAccount` in one
+  transaction:
+  - it deletes our `users` row, and preferences and reports cascade;
+    shared `markdown_cache` rows stay;
+  - it deletes `neon_auth."user"`, and Better Auth's sessions and linked
+    accounts cascade, so the email can sign up fresh.
+
+  This and the `linkAppUser` create guard are the only places that read the
+  `neon_auth` schema, and they depend only on the `"user"` table and its `id`.
+  A deleted account's mobile JWT stays valid for up to 15 minutes. The guard
+  creates a row only while the auth user exists, so a late request answers
+  401 instead of recreating the account.
 
 ## Design system
 

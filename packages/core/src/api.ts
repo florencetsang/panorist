@@ -78,6 +78,9 @@ export function createApi(options: ApiOptions = {}) {
 
     savePushSubscription: (subscription: PushSubscriptionJSON) =>
       request<void>('POST', '/api/push/subscribe', { subscription }),
+
+    /** Permanently delete the signed-in account; the caller then drops its session. */
+    deleteAccount: () => request<void>('DELETE', '/api/account'),
   };
 }
 

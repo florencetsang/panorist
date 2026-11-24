@@ -3,12 +3,13 @@
 import Link from 'next/link';
 import type { ButtonHTMLAttributes, InputHTMLAttributes, ReactNode } from 'react';
 
-type Variant = 'primary' | 'secondary' | 'ghost';
+type Variant = 'primary' | 'secondary' | 'ghost' | 'danger';
 
 const VARIANT: Record<Variant, string> = {
   primary: 'bg-ink text-paper hover:opacity-90',
   secondary: 'border border-rule bg-surface text-ink hover:bg-sunken',
   ghost: 'text-ink-muted hover:bg-sunken hover:text-ink',
+  danger: 'bg-danger text-paper hover:opacity-90',
 };
 
 const BASE =
