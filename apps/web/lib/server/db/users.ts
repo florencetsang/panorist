@@ -3,6 +3,7 @@
 import 'server-only';
 
 import { DELIVERY_HOUR, DELIVERY_TIMEZONE } from '@panorist/core/delivery';
+import { isPlan, type Plan } from '@panorist/core/features';
 import type {
   PreferencesPatch,
   PushSubscriptionJSON,
@@ -27,6 +28,13 @@ export async function getUserWithPreferences(userId: string): Promise<UserWithPr
     WHERE u.id = ${userId}
   `;
   return (rows[0] as UserWithPreferences | undefined) ?? null;
+}
+
+/** The user's plan, or null when the user doesn't exist. */
+export async function getUserPlan(userId: string): Promise<Plan | null> {
+  const rows = await db()`SELECT plan FROM users WHERE id = ${userId}`;
+  const plan = (rows[0] as { plan: unknown } | undefined)?.plan;
+  return isPlan(plan) ? plan : null;
 }
 
 /**

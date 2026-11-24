@@ -7,6 +7,8 @@
 
 import 'server-only';
 
+import { FEATURE_KEYS, type FeatureKey } from '@panorist/core/features';
+
 function readRequired(names: readonly string[], feature: string): string[] {
   const missing = names.filter((name) => !process.env[name]);
   if (missing.length > 0) {
@@ -18,6 +20,17 @@ function readRequired(names: readonly string[], feature: string): string[] {
 function readFlag(name: string): boolean {
   const value = process.env[name];
   return value === '1' || value === 'true';
+}
+
+/** A kill switch: on unless explicitly set to 0/false. */
+function readSwitch(name: string): boolean {
+  const value = process.env[name];
+  return value !== '0' && value !== 'false';
+}
+
+function readPositiveInt(name: string): number | null {
+  const value = Number(process.env[name]);
+  return Number.isInteger(value) && value > 0 ? value : null;
 }
 
 export const env = {
@@ -32,6 +45,36 @@ export const env = {
       'LLM',
     );
     return { baseUrl, apiKey, model };
+  },
+
+  /**
+   * Models for AI insights: `grounded` (search-backed event summaries) and
+   * `lite` (highlight detection, selection lookup, term explanations).
+   * Both fall back to LLM_MODEL.
+   */
+  insightModels(): { grounded: string; lite: string } {
+    const [model] = readRequired(['LLM_MODEL'], 'LLM');
+    return {
+      grounded: process.env.LLM_MODEL_GROUNDED || model,
+      lite: process.env.LLM_MODEL_LITE || model,
+    };
+  },
+
+  /** Global AI feature kill switches (FEATURE_EVENT_INSIGHTS=0 etc.); all on by default. */
+  featureSwitches(): Record<FeatureKey, boolean> {
+    return Object.fromEntries(
+      FEATURE_KEYS.map((key) => [key, readSwitch(`FEATURE_${key.toUpperCase()}`)]),
+    ) as Record<FeatureKey, boolean>;
+  },
+
+  /** Pre-generate term explanations when a section is annotated. Off by default. */
+  termPrefetch(): boolean {
+    return readFlag('AI_TERM_PREFETCH');
+  },
+
+  /** Safety valve: uncached AI calls per Hong Kong day across all users; null = no cap. */
+  aiGlobalDailyLimit(): number | null {
+    return readPositiveInt('AI_GLOBAL_DAILY_LIMIT');
   },
 
   vapid(): { publicKey: string; privateKey: string; subject: string } {

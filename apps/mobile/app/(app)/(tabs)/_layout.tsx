@@ -1,10 +1,12 @@
 import { Tabs } from 'expo-router';
 import { View } from 'react-native';
 
+import { useFeatures } from '../../../src/lib/features.ts';
 import { font, useTheme } from '../../../src/ui/theme.ts';
 
 export default function TabsLayout() {
   const { color } = useTheme();
+  const { has } = useFeatures();
   return (
     <Tabs
       screenOptions={{
@@ -30,6 +32,10 @@ export default function TabsLayout() {
       }}
     >
       <Tabs.Screen name="index" options={{ title: 'Briefings' }} />
+      <Tabs.Screen
+        name="library"
+        options={{ title: 'Library', href: has('insight_library') ? undefined : null }}
+      />
       <Tabs.Screen name="preferences" options={{ title: 'Preferences' }} />
       <Tabs.Screen name="account" options={{ title: 'Account' }} />
     </Tabs>

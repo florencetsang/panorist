@@ -12,6 +12,7 @@ import type { Frequency, ReportDraft, UserWithPreferences } from '@panorist/core
 import { dbMarkdownCache } from '../db/markdown-cache.ts';
 import { saveReport } from '../db/reports.ts';
 import { savePushSubscription } from '../db/users.ts';
+import { defaultSectionAnnotator } from '../insights/service.ts';
 import { getLlmProvider } from '../llm/index.ts';
 import { sendPush } from '../push.ts';
 import { generateReport, type ReportGenerationDeps } from './generate-report.ts';
@@ -45,7 +46,11 @@ export async function generateDueReports(
 ): Promise<DueReportsResult> {
   const due = dueFrequencies(user, now);
   if (due.length === 0) return { status: 'nothing-due' };
-  const generationDeps = deps ?? { llm: getLlmProvider(), cache: dbMarkdownCache };
+  const generationDeps = deps ?? {
+    llm: getLlmProvider(),
+    cache: dbMarkdownCache,
+    annotate: defaultSectionAnnotator(),
+  };
 
   const to = localDate(DELIVERY_TIMEZONE, now);
   const ids: Partial<Record<Frequency, string>> = {};
