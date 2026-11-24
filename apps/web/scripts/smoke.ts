@@ -9,6 +9,20 @@
 import assert from 'node:assert';
 
 import { db } from '../lib/server/db/client.ts';
+import {
+  consumeAiCall,
+  dbAliasStore,
+  dbAnnotationStore,
+  dbExplanationStore,
+  deleteUserInsight,
+  getAiCallsUsed,
+  getReportAnnotations,
+  getUserInsight,
+  canonicalDisplayName,
+  listUserInsights,
+  saveUserInsight,
+  setUserInsightStarred,
+} from '../lib/server/db/insights.ts';
 import { getCachedMarkdown, saveCachedMarkdown } from '../lib/server/db/markdown-cache.ts';
 import {
   getHydratedReportsForUser,
@@ -18,12 +32,13 @@ import {
 } from '../lib/server/db/reports.ts';
 import {
   getUsersDueForReport,
+  getUserPlan,
   getUserWithPreferences,
   savePushSubscription,
   updatePreferences,
 } from '../lib/server/db/users.ts';
 import type { CategorySlug } from '@panorist/core/categories';
-import type { MarkdownCacheKey, ReportDraft } from '@panorist/core/types';
+import type { Annotation, MarkdownCacheKey, ReportDraft } from '@panorist/core/types';
 
 const SEED_EMAIL = 'test@example.com';
 // A fixed past date: real runs only cache "today", so this key is ours alone.
@@ -33,6 +48,15 @@ const TEST_CACHE_KEY: MarkdownCacheKey = {
   to: '2000-01-01',
 };
 const MARKDOWN = '## Test headline\n\nA summarized test topic.';
+// Keys and aliases only this script uses, so cleanup can't touch real rows.
+const TEST_ANNOTATION: Annotation = {
+  kind: 'term',
+  surface: 'test topic',
+  key: 'smoke-test-topic',
+  displayName: 'Smoke test topic',
+};
+const TEST_ALIAS = 'smoke test alias';
+const TEST_AI_DAY = '2000-01-01';
 
 const isDue = async (instant: Date) =>
   (await getUsersDueForReport(instant)).some((u) => u.email === SEED_EMAIL);
@@ -133,7 +157,95 @@ async function main() {
       assert.ok(reports[i - 1].createdAt >= reports[i].createdAt, 'newest first');
     }
     const hydrated = (await getHydratedReportsForUser(userId, 50)).find((r) => r.id === first.id);
-    assert.deepEqual(hydrated?.topics, [{ category: 'hong_kong', markdown: MARKDOWN }]);
+    assert.deepEqual(hydrated?.topics, [
+      { category: 'hong_kong', markdown: MARKDOWN, annotations: [] },
+    ]);
+
+    // AI insights: highlights join into hydrated topics and seed aliases.
+    assert.equal(await getUserPlan(userId), 'free');
+    assert.equal(await dbAnnotationStore.has(TEST_CACHE_KEY), false);
+    const aliasRow = {
+      norm: 'test topic smoke',
+      kind: TEST_ANNOTATION.kind,
+      key: TEST_ANNOTATION.key,
+      displayName: TEST_ANNOTATION.displayName,
+    };
+    await dbAnnotationStore.save(TEST_CACHE_KEY, [TEST_ANNOTATION], 'smoke', 1, [aliasRow]);
+    await dbAnnotationStore.save(TEST_CACHE_KEY, [], 'loser', 1, []);
+    assert.equal(await dbAnnotationStore.has(TEST_CACHE_KEY), true);
+    const annotated = (await getHydratedReportsForUser(userId, 50)).find((r) => r.id === first.id);
+    assert.deepEqual(annotated?.topics[0].annotations, [TEST_ANNOTATION], 'first writer wins');
+    assert.deepEqual(await getReportAnnotations(userId, first.id), [TEST_ANNOTATION]);
+    assert.deepEqual(await dbAliasStore.get(aliasRow.norm), {
+      kind: 'term',
+      key: TEST_ANNOTATION.key,
+      displayName: TEST_ANNOTATION.displayName,
+    });
+    await dbAliasStore.save(TEST_ALIAS, { kind: 'reject' });
+    assert.deepEqual(await dbAliasStore.get(TEST_ALIAS), { kind: 'reject' });
+    await dbAliasStore.save('smoke other alias', { ...TEST_ANNOTATION, displayName: 'Made up' });
+    assert.equal(
+      await canonicalDisplayName('term', TEST_ANNOTATION.key),
+      TEST_ANNOTATION.displayName,
+      'highlight names outrank selection aliases',
+    );
+    assert.equal(await canonicalDisplayName('event', TEST_ANNOTATION.key), null);
+    assert.equal(await canonicalDisplayName('term', 'smoke-never-produced'), null);
+
+    // Shared explanations: one claim at a time; failures can be retried.
+    const identity = {
+      kind: 'term' as const,
+      key: TEST_ANNOTATION.key,
+      bucket: 'smoke',
+      promptVersion: 1,
+    };
+    const claimId = await dbExplanationStore.claim(identity, TEST_ANNOTATION.displayName);
+    assert.ok(claimId, 'first claim wins');
+    assert.equal(await dbExplanationStore.claim(identity, 'x'), null, 'live claim blocks others');
+    await dbExplanationStore.fail(claimId);
+    assert.equal(
+      await dbExplanationStore.claim(identity, 'x'),
+      claimId,
+      'failed rows are reclaimable',
+    );
+    const ready = await dbExplanationStore.complete(claimId, 'Explainer', 'smoke');
+    assert.equal(ready.status, 'ready');
+    assert.ok(ready.generatedAt instanceof Date);
+    assert.equal(await dbExplanationStore.claim(identity, 'x'), null, 'ready rows are final');
+    assert.equal((await dbExplanationStore.find(identity))?.markdown, 'Explainer');
+
+    // Library: idempotent save, star keeps first time, list filters, delete.
+    const saved = await saveUserInsight(userId, claimId, first.id, 'source');
+    assert.equal(saved.reportId, first.id);
+    assert.equal(saved.starredAt, null);
+    const again = await saveUserInsight(userId, claimId, null, null);
+    assert.equal(again.id, saved.id, 'one library entry per explanation');
+    assert.equal(again.reportId, first.id, 'keeps the first report link');
+    const starred = await setUserInsightStarred(userId, saved.id!, true);
+    assert.ok(starred?.starredAt instanceof Date);
+    const restarred = await setUserInsightStarred(userId, saved.id!, true);
+    assert.equal(restarred?.starredAt?.getTime(), starred.starredAt.getTime());
+    assert.equal(
+      (await listUserInsights(userId, { starred: true, before: null }))[0]?.id,
+      saved.id,
+    );
+    assert.deepEqual(await listUserInsights(userId, { starred: false, before: saved.id }), []);
+    await setUserInsightStarred(userId, saved.id!, false);
+    assert.ok(
+      !(await listUserInsights(userId, { starred: true, before: null })).some(
+        (i) => i.id === saved.id,
+      ),
+    );
+    assert.equal(await getUserInsight('00000000-0000-0000-0000-000000000000', saved.id!), null);
+    assert.equal(await deleteUserInsight(userId, saved.id!), true);
+    assert.equal(await getUserInsight(userId, saved.id!), null);
+
+    // Usage: per-user and global daily caps.
+    assert.equal(await consumeAiCall(userId, TEST_AI_DAY, 2, null), true);
+    assert.equal(await consumeAiCall(userId, TEST_AI_DAY, 2, null), true);
+    assert.equal(await consumeAiCall(userId, TEST_AI_DAY, 2, null), false, 'user cap');
+    assert.equal(await getAiCallsUsed(userId, TEST_AI_DAY), 2);
+    assert.equal(await consumeAiCall(userId, TEST_AI_DAY, 10, 2), false, 'global cap');
 
     // setReportRead: new reports are unread; read keeps the first read_at; unread clears it.
     assert.equal(mine.readAt, null, 'new report must start unread');
@@ -159,6 +271,18 @@ async function main() {
     if (createdReportIds.length) {
       await db()`DELETE FROM reports WHERE id = ANY(${createdReportIds}::bigint[])`;
     }
+    await db()`DELETE FROM ai_usage WHERE user_id = ${userId} AND day = ${TEST_AI_DAY}::date`;
+    await db()`DELETE FROM ai_explanations WHERE canonical_key = ${TEST_ANNOTATION.key}`;
+    await db()`
+      DELETE FROM insight_aliases
+      WHERE surface_norm IN (${TEST_ALIAS}, 'test topic smoke', 'smoke other alias')
+    `;
+    await db()`
+      DELETE FROM markdown_annotations
+      WHERE category = ${TEST_CACHE_KEY.category}
+        AND frequency = ${TEST_CACHE_KEY.frequency}
+        AND to_date = ${TEST_CACHE_KEY.to}::date
+    `;
     await db()`
       DELETE FROM markdown_cache
       WHERE category = ${TEST_CACHE_KEY.category}

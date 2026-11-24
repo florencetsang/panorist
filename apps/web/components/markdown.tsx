@@ -4,8 +4,16 @@
  * inject HTML.
  */
 
-import type { ReactNode } from 'react';
-import { parseMarkdown, type Block, type Inline, type List } from '@panorist/core/markdown';
+import { createContext, useContext, useMemo, type ReactNode } from 'react';
+import {
+  annotateBlocks,
+  parseMarkdown,
+  type Block,
+  type Inline,
+  type List,
+} from '@panorist/core/markdown';
+import { INSIGHT_KIND_LABEL } from '@panorist/core/insights';
+import type { Annotation } from '@panorist/core/types';
 
 const LINK =
   'text-ink underline decoration-accent/60 decoration-[1.5px] underline-offset-[3px] transition hover:decoration-accent';
@@ -26,6 +34,32 @@ const HEADING_CLASS = [
 ];
 
 const BODY = 'font-serif text-[19px] leading-[1.7] text-ink/90';
+
+/** Events read as a marker highlight; terms as a dotted "definition" underline. */
+const HIGHLIGHT = {
+  event:
+    'cursor-pointer rounded-sm bg-accent-soft px-0.5 text-inherit transition hover:bg-accent/20 focus-visible:outline-2 focus-visible:outline-accent',
+  term: 'cursor-pointer text-inherit underline decoration-ink-faint decoration-dotted decoration-[1.5px] underline-offset-[4px] transition hover:decoration-accent focus-visible:outline-2 focus-visible:outline-accent',
+} as const;
+
+const AnnotationHandler = createContext<((annotation: Annotation) => void) | null>(null);
+
+function Highlight({ node }: { node: Extract<Inline, { type: 'annotation' }> }) {
+  const onSelect = useContext(AnnotationHandler);
+  const { annotation } = node;
+  if (!onSelect) return <>{renderInline(node.children)}</>;
+  return (
+    <button
+      type="button"
+      onClick={() => onSelect(annotation)}
+      aria-haspopup="dialog"
+      title={`${INSIGHT_KIND_LABEL[annotation.kind]}: ${annotation.displayName}`}
+      className={`inline font-[inherit] text-[length:inherit] leading-[inherit] ${HIGHLIGHT[annotation.kind]}`}
+    >
+      {renderInline(node.children)}
+    </button>
+  );
+}
 
 function renderInline(nodes: Inline[]): ReactNode[] {
   return nodes.map((node, i) => {
@@ -52,6 +86,8 @@ function renderInline(nodes: Inline[]): ReactNode[] {
             {renderInline(node.children)}
           </a>
         );
+      case 'annotation':
+        return <Highlight key={i} node={node} />;
     }
   });
 }
@@ -96,12 +132,25 @@ function BlockView({ block }: { block: Block }) {
   }
 }
 
-export function Markdown({ source }: { source: string }) {
+/** With `annotations` and `onAnnotation`, AI highlights become buttons. */
+export function Markdown({
+  source,
+  annotations,
+  onAnnotation,
+}: {
+  source: string;
+  annotations?: readonly Annotation[];
+  onAnnotation?: (annotation: Annotation) => void;
+}) {
+  const blocks = useMemo(() => {
+    const parsed = parseMarkdown(source);
+    return annotations && onAnnotation ? annotateBlocks(parsed, annotations) : parsed;
+  }, [source, annotations, onAnnotation]);
   return (
-    <>
-      {parseMarkdown(source).map((block, i) => (
+    <AnnotationHandler.Provider value={onAnnotation ?? null}>
+      {blocks.map((block, i) => (
         <BlockView key={i} block={block} />
       ))}
-    </>
+    </AnnotationHandler.Provider>
   );
 }

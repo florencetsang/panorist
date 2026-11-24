@@ -1,7 +1,8 @@
 /**
  * GET   /api/reports[?hydrate=1] — the caller's recent reports, newest
  *       first. With hydrate=1 each report also carries `topics`: its cache
- *       pointers resolved into renderable {category, markdown} sections.
+ *       pointers resolved into renderable {category, markdown, annotations}
+ *       sections (annotations limited to the caller's entitled highlight kinds).
  * PATCH /api/reports  body {reportId, read} — mark one of the caller's
  *       reports read or unread; returns {id, readAt}.
  *
@@ -14,6 +15,11 @@ import {
   getReportsForUser,
   setReportRead,
 } from '../../../lib/server/db/reports.ts';
+import {
+  entitledKinds,
+  filterTopicAnnotations,
+  getEntitlements,
+} from '../../../lib/server/features.ts';
 import { jsonError, readJsonObject } from '../../../lib/server/http.ts';
 import { isReportId } from '@panorist/core/validation';
 
@@ -25,10 +31,13 @@ export async function GET(request: Request): Promise<Response> {
 
   try {
     const hydrate = new URL(request.url).searchParams.get('hydrate') === '1';
-    const reports = hydrate
-      ? await getHydratedReportsForUser(user.id)
-      : await getReportsForUser(user.id);
-    return Response.json(reports);
+    if (!hydrate) return Response.json(await getReportsForUser(user.id));
+    const [reports, entitlements] = await Promise.all([
+      getHydratedReportsForUser(user.id),
+      getEntitlements(user.id),
+    ]);
+    const kinds = entitledKinds(entitlements?.features ?? []);
+    return Response.json(reports.map((report) => filterTopicAnnotations(report, kinds)));
   } catch (err) {
     console.error('[api/reports] GET failed', err);
     return jsonError(500, 'internal error');

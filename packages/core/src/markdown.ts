@@ -7,12 +7,18 @@
  * Only http(s) links become link nodes; anything else stays literal text.
  */
 
+import type { Annotation } from './types.ts';
+
 export type Inline =
   | { type: 'text'; text: string }
   | { type: 'strong'; text: string }
   | { type: 'em'; text: string }
   | { type: 'code'; text: string }
-  | { type: 'link'; href: string; children: Inline[] };
+  | { type: 'link'; href: string; children: Inline[] }
+  | { type: 'annotation'; annotation: Annotation; children: StyledText[] };
+
+/** Leaf inline nodes that carry plain text and may be highlighted. */
+export type StyledText = Extract<Inline, { type: 'text' | 'strong' | 'em' }>;
 
 export interface ListItem {
   content: Inline[];
@@ -181,4 +187,96 @@ export function parseMarkdown(md: string): Block[] {
   }
 
   return blocks;
+}
+
+// ---------------------------------------------------------------------------
+// AI highlights
+// ---------------------------------------------------------------------------
+
+/**
+ * Wrap the first occurrence of each annotation's surface in an annotation
+ * node. Matching is exact and stays within one text/bold/italic run; links,
+ * code and code blocks are never highlighted. At a tie the longer surface
+ * wins, so "Federal Reserve" beats "Federal".
+ */
+export function annotateBlocks(blocks: Block[], annotations: readonly Annotation[]): Block[] {
+  if (annotations.length === 0) return blocks;
+  const pending = new Set(annotations.filter((a) => a.surface.length > 0));
+
+  const inlines = (nodes: Inline[]): Inline[] =>
+    nodes.flatMap((node) =>
+      node.type === 'text' || node.type === 'strong' || node.type === 'em'
+        ? highlightRun(node, pending)
+        : [node],
+    );
+  const list = (l: List): List => ({
+    ...l,
+    items: l.items.map((item) => ({
+      content: inlines(item.content),
+      sublist: item.sublist && list(item.sublist),
+    })),
+  });
+
+  return blocks.map((block) => {
+    switch (block.type) {
+      case 'heading':
+      case 'paragraph':
+        return { ...block, content: inlines(block.content) };
+      case 'list':
+        return list(block);
+      default:
+        return block;
+    }
+  });
+}
+
+function highlightRun(node: StyledText, pending: Set<Annotation>): Inline[] {
+  let best: { annotation: Annotation; index: number } | null = null;
+  for (const annotation of pending) {
+    const index = node.text.indexOf(annotation.surface);
+    if (index < 0) continue;
+    if (
+      !best ||
+      index < best.index ||
+      (index === best.index && annotation.surface.length > best.annotation.surface.length)
+    ) {
+      best = { annotation, index };
+    }
+  }
+  if (!best) return [node];
+
+  const { annotation, index } = best;
+  pending.delete(annotation);
+  const end = index + annotation.surface.length;
+  const piece = (text: string): StyledText => ({ type: node.type, text });
+  const out: Inline[] = [];
+  if (index > 0) out.push(piece(node.text.slice(0, index)));
+  out.push({ type: 'annotation', annotation, children: [piece(annotation.surface)] });
+  if (end < node.text.length) out.push(...highlightRun(piece(node.text.slice(end)), pending));
+  return out;
+}
+
+/** The visible text of each heading, paragraph and list item, in order. */
+export function markdownParagraphs(md: string): string[] {
+  const out: string[] = [];
+  const visitList = (list: List) => {
+    for (const item of list.items) {
+      out.push(inlineText(item.content));
+      if (item.sublist) visitList(item.sublist);
+    }
+  };
+  for (const block of parseMarkdown(md)) {
+    if (block.type === 'heading' || block.type === 'paragraph') out.push(inlineText(block.content));
+    else if (block.type === 'list') visitList(block);
+  }
+  return out.filter((text) => text.trim() !== '');
+}
+
+/** The visible text of inline nodes, e.g. for picking words from a paragraph. */
+export function inlineText(nodes: readonly Inline[]): string {
+  return nodes
+    .map((node) =>
+      node.type === 'link' || node.type === 'annotation' ? inlineText(node.children) : node.text,
+    )
+    .join('');
 }

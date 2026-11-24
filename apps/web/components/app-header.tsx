@@ -7,14 +7,17 @@ import { usePathname, useRouter } from 'next/navigation';
 import { useEffect, useRef, useState } from 'react';
 
 import { initials, mastheadDate } from '@panorist/core/format';
+import type { FeatureKey } from '@panorist/core/features';
 import { authClient } from '../lib/client/auth.ts';
+import { useFeatures } from '../lib/client/features.ts';
 import { hasPushSubscription, isPushSupported, subscribeUser } from '../lib/client/push.ts';
 import { applyTheme, readTheme, type Theme } from '../lib/client/theme.ts';
 import { useClientValue } from '../lib/client/use-client-value.ts';
 import { Wordmark } from './wordmark.tsx';
 
-const LINKS = [
+const LINKS: { href: string; label: string; feature?: FeatureKey }[] = [
   { href: '/', label: 'Briefings' },
+  { href: '/library', label: 'Library', feature: 'insight_library' },
   { href: '/preferences', label: 'Preferences' },
 ];
 
@@ -22,6 +25,8 @@ export function AppHeader() {
   const pathname = usePathname();
   // Client-only: the server's clock and locale may differ from the reader's.
   const today = useClientValue(mastheadDate, '');
+  const { has } = useFeatures();
+  const links = LINKS.filter(({ feature }) => !feature || has(feature));
 
   const isActive = (href: string) =>
     href === '/' ? pathname === '/' || pathname.startsWith('/reports') : pathname.startsWith(href);
@@ -35,7 +40,7 @@ export function AppHeader() {
         </div>
         <div className="flex items-center gap-1 sm:gap-2">
           <nav className="flex items-center gap-1 text-sm">
-            {LINKS.map(({ href, label }) => (
+            {links.map(({ href, label }) => (
               <Link
                 key={href}
                 href={href}

@@ -42,4 +42,23 @@ describe('createApi', () => {
     await createApi({ fetch }).getReport('a/b');
     expect(fetch.mock.calls[0][0]).toBe('/api/reports/a%2Fb');
   });
+
+  it('explain polls while the explanation is pending, then gives up with 504', async () => {
+    const replies = [202, 202, 200];
+    const fetch = vi.fn(async () => {
+      const status = replies.shift() ?? 202;
+      return new Response(JSON.stringify(status === 200 ? { id: 'i1' } : { status: 'pending' }), {
+        status,
+      });
+    });
+    const api = createApi({ fetch });
+    const input = { kind: 'term' as const, key: 'cpi', displayName: 'CPI' };
+    await expect(api.explain(input, { intervalMs: 0, maxAttempts: 5 })).resolves.toEqual({
+      id: 'i1',
+    });
+    expect(fetch).toHaveBeenCalledTimes(3);
+
+    const err = await api.explain(input, { intervalMs: 0, maxAttempts: 2 }).catch((e) => e);
+    expect((err as ApiError).status).toBe(504);
+  });
 });

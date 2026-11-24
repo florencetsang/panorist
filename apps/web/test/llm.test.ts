@@ -31,6 +31,17 @@ describe('gemini', () => {
     });
   });
 
+  it('can turn off search and request JSON output', () => {
+    const schema = { type: 'OBJECT' };
+    expect(
+      buildRequestBody({ system: 'S', user: 'U' }, { search: false, jsonSchema: schema }),
+    ).toEqual({
+      systemInstruction: { parts: [{ text: 'S' }] },
+      contents: [{ role: 'user', parts: [{ text: 'U' }] }],
+      generationConfig: { responseMimeType: 'application/json', responseSchema: schema },
+    });
+  });
+
   it('joins text parts and drops thoughts', () => {
     expect(
       extractText(geminiBody([{ text: 'a' }, { text: 'x', thought: true }, { text: 'b' }])),

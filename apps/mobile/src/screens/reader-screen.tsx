@@ -1,15 +1,17 @@
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Pressable, ScrollView, View, type ScrollViewInstance } from 'react-native';
 
 import { ApiError } from '@panorist/core/api';
 import { categoryLabel } from '@panorist/core/categories';
 import { deliveredLabel, frequencyLabel, periodLabel, readingMinutes } from '@panorist/core/format';
-import type { HydratedReportWire } from '@panorist/core/types';
+import type { Annotation, HydratedReportWire } from '@panorist/core/types';
 import { useSession } from '../auth/session.tsx';
+import { useFeatures } from '../lib/features.ts';
 import { Markdown } from '../ui/markdown.tsx';
 import { Button, Chip, Loading, Notice, Rule, Text } from '../ui/primitives.tsx';
 import { font, space, useTheme } from '../ui/theme.ts';
+import { InsightSheet, type SheetRequest } from './insight-sheet.tsx';
 
 type State =
   | { status: 'loading' }
@@ -26,6 +28,15 @@ export function ReaderScreen() {
   const [saving, setSaving] = useState(false);
   const scroll = useRef<ScrollViewInstance>(null);
   const offsets = useRef<Record<string, number>>({});
+  const { has } = useFeatures();
+  const [sheet, setSheet] = useState<SheetRequest | null>(null);
+  const openAnnotation = useCallback(
+    ({ kind, key, displayName }: Annotation) =>
+      setSheet({ type: 'target', target: { kind, key, displayName } }),
+    [],
+  );
+  const pickWords = useCallback((text: string) => setSheet({ type: 'pick', text }), []);
+  const freeSelect = has('free_select');
 
   useEffect(() => {
     let cancelled = false;
@@ -152,7 +163,12 @@ export function ReaderScreen() {
                 </Text>
                 <Text variant="title">{categoryLabel(t.category)}</Text>
               </View>
-              <Markdown source={t.markdown} />
+              <Markdown
+                source={t.markdown}
+                annotations={t.annotations}
+                onAnnotation={openAnnotation}
+                onLongPressText={freeSelect ? pickWords : undefined}
+              />
             </View>
           ))
         )}
@@ -165,6 +181,7 @@ export function ReaderScreen() {
           <Button variant="secondary" label="Back to all briefings" onPress={() => router.back()} />
         </View>
       </ScrollView>
+      <InsightSheet request={sheet} reportId={report.id} onClose={() => setSheet(null)} />
     </>
   );
 }

@@ -5,7 +5,10 @@ and, separately, a **weekly** (Monday) report. Every day at 07:00 Hong Kong
 time a cron job asks a search-grounded LLM for the news in each category,
 stores the report, and sends a web push. Readers sign in on the web or in the
 iOS/Android app to read past reports (with read/unread status) and edit
-preferences.
+preferences. Optional AI insights highlight key events ("All I need to know")
+and terms ("Tell me more") in each briefing, explain any selected phrase, and
+keep a starrable library of explanations. Each piece is toggled per plan and by
+env switches (see ARCHITECTURE.md → AI insights).
 
 Prototype goals: minimal code, near-zero fixed cost, scales to zero.
 
@@ -108,7 +111,7 @@ latter directly. Remove the alias once typescript-eslint supports TS 7.
 Schema changes are numbered SQL files in `db/migrations/`, applied in order by
 `scripts/migrate.ts`, each in a transaction, and recorded in
 `schema_migrations`. To change the schema, add the next file (e.g.
-`0004_add_bookmarks.sql`) — never edit an applied one. The runner prefers
+`0006_add_bookmarks.sql`) — never edit an applied one. The runner prefers
 `DATABASE_URL_UNPOOLED`, since DDL belongs on Neon's direct endpoint.
 
 Databases created by the old `db/schema.sql` are adopted automatically: if the
