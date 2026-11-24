@@ -32,6 +32,8 @@ interface SessionContextValue {
   /** Adopt a session from a completed sign-in flow. */
   setSession: (session: StoredSession) => void;
   signOut: () => Promise<void>;
+  /** Permanently delete the account, then drop the local session. Throws on failure. */
+  deleteAccount: () => Promise<void>;
 }
 
 const SessionContext = createContext<SessionContextValue | null>(null);
@@ -100,6 +102,13 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       setSession: adopt,
       signOut: async () => {
         await endSession(sessionRef.current);
+        adopt(null);
+      },
+      deleteAccount: async () => {
+        await api.deleteAccount();
+        // The server session went with the account: only clear the local one.
+        await endSession(null);
+        invalidateJwt();
         adopt(null);
       },
     }),

@@ -78,6 +78,16 @@ describe('requireUser', () => {
     });
     expect(((await requireUser(req(), d)) as Response).status).toBe(409);
   });
+
+  it('answers 401 for a deleted account whose JWT is still valid', async () => {
+    const d = deps({
+      verifyBearer: async () => ALICE,
+      linkUser: async () => ({ status: 'gone' }),
+    });
+    expect(((await requireUser(req({ authorization: 'Bearer x' }), d)) as Response).status).toBe(
+      401,
+    );
+  });
 });
 
 describe('isAllowedAppRedirect', () => {

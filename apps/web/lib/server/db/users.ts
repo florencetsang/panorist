@@ -126,7 +126,9 @@ export async function savePushSubscription(
 export type LinkResult =
   | { status: 'linked'; userId: string }
   /** An account already has this email, and the sign-in hasn't proven ownership. */
-  | { status: 'email-unverified' };
+  | { status: 'email-unverified' }
+  /** The auth user no longer exists (deleted account; its JWT hasn't expired yet). */
+  | { status: 'gone' };
 
 /**
  * Map an auth identity to our `users` row, creating it (with paused default
@@ -164,18 +166,37 @@ export async function linkAppUser(
   }
 
   const timezone = isTimeZone(timezoneHint) ? timezoneHint : 'UTC';
-  // One statement, so a user row never exists without its preferences.
+  // One statement, so a user row never exists without its preferences. The
+  // auth user must still exist: a deleted account's mobile JWT stays valid
+  // for up to 15 minutes and must not recreate the account.
   const created = await db()`
-    WITH u AS (
+    WITH auth AS (
+      SELECT EXISTS (SELECT 1 FROM neon_auth."user" WHERE id::text = ${identity.authUserId}) AS ok
+    ), u AS (
       INSERT INTO users (email, auth_user_id, timezone)
-      VALUES (${email}, ${identity.authUserId}, ${timezone})
+      SELECT ${email}, ${identity.authUserId}, ${timezone} FROM auth WHERE auth.ok
       ON CONFLICT DO NOTHING
       RETURNING id
     ), p AS (
       INSERT INTO preferences (user_id) SELECT id FROM u
     )
-    SELECT id FROM u
+    SELECT (SELECT ok FROM auth) AS "authExists", (SELECT id FROM u) AS id
   `;
-  if (created.length > 0) return { status: 'linked', userId: (created[0] as { id: string }).id };
+  const row = created[0] as { authExists: boolean; id: string | null } | undefined;
+  if (row && !row.authExists) return { status: 'gone' };
+  if (row?.id) return { status: 'linked', userId: row.id };
   return linkAppUser(identity, timezoneHint); // lost a race with a concurrent request
+}
+
+/**
+ * Delete an account: our `users` row (preferences and reports cascade) and
+ * the Neon Auth user (its sessions and linked accounts cascade), atomically.
+ * Shared `markdown_cache` rows are kept. Returns false when nothing matched.
+ */
+export async function deleteAccount(userId: string, authUserId: string): Promise<boolean> {
+  const [app, auth] = await db().transaction((sql) => [
+    sql`DELETE FROM users WHERE id = ${userId} AND auth_user_id = ${authUserId} RETURNING id`,
+    sql`DELETE FROM neon_auth."user" WHERE id::text = ${authUserId} RETURNING id`,
+  ]);
+  return (app?.length ?? 0) > 0 || (auth?.length ?? 0) > 0;
 }

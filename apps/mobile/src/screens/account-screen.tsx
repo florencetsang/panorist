@@ -11,9 +11,10 @@ import { Button, Rule, Text } from '../ui/primitives.tsx';
 import { font, space, useTheme } from '../ui/theme.ts';
 
 export function AccountScreen() {
-  const { session, signOut } = useSession();
+  const { session, signOut, deleteAccount } = useSession();
   const { color } = useTheme();
   const [busy, setBusy] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const user = session?.user;
   const display = user?.name || user?.email || '';
 
@@ -29,6 +30,29 @@ export function AccountScreen() {
         },
       },
     ]);
+  }
+
+  function confirmDelete() {
+    Alert.alert(
+      'Delete your account?',
+      'Your account, preferences and every briefing will be permanently deleted. This can’t be undone.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete forever',
+          style: 'destructive',
+          onPress: async () => {
+            setDeleting(true);
+            try {
+              await deleteAccount();
+            } catch {
+              setDeleting(false);
+              Alert.alert('Couldn’t delete your account', 'Check your connection and try again.');
+            }
+          },
+        },
+      ],
+    );
   }
 
   return (
@@ -76,7 +100,22 @@ export function AccountScreen() {
           <Rule />
         </View>
 
-        <Button variant="secondary" label="Sign out" onPress={confirmSignOut} busy={busy} />
+        <View style={{ gap: space(3) }}>
+          <Button
+            variant="secondary"
+            label="Sign out"
+            onPress={confirmSignOut}
+            busy={busy}
+            disabled={deleting}
+          />
+          <Button
+            variant="ghost"
+            label="Delete account"
+            onPress={confirmDelete}
+            busy={deleting}
+            disabled={busy}
+          />
+        </View>
       </ScrollView>
     </SafeAreaView>
   );

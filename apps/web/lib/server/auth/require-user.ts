@@ -40,7 +40,7 @@ const defaultDeps: RequireUserDeps = {
 
 /**
  * The caller's user, or the error Response to return as-is: 401 without a
- * valid session, 409 when the email belongs to an existing account that an
+ * valid session (or for a deleted account's still-valid JWT), 409 when the email belongs to an existing account that an
  * unverified sign-up must not claim.
  */
 export async function requireUser(
@@ -65,6 +65,7 @@ export async function requireUser(
     console.error('[auth] linking the app user failed', err);
     return jsonError(500, 'internal error');
   }
+  if (result.status === 'gone') return jsonError(401, 'unauthorized');
   if (result.status === 'email-unverified') {
     return jsonError(409, 'verify your email to access the existing account for this address');
   }
