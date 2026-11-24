@@ -125,14 +125,15 @@ export async function savePushSubscription(
 
 export type LinkResult =
   | { status: 'linked'; userId: string }
-  /** An unlinked account already has this email, and the sign-in hasn't proven ownership. */
+  /** An account already has this email, and the sign-in hasn't proven ownership. */
   | { status: 'email-unverified' };
 
 /**
  * Map an auth identity to our `users` row, creating it (with paused default
- * preferences) on first sight. A pre-auth row with the same email — e.g. the
- * dev seed — is adopted, but only for a verified email, so an unverified
- * sign-up can't take over someone else's reports.
+ * preferences) on first sight. An existing row with the same email — the dev
+ * seed, or one left by a deleted auth user — is adopted, but only for a
+ * verified email, so an unverified sign-up can't take over someone else's
+ * reports.
  *
  * The common case (already linked) is one indexed lookup.
  */
@@ -149,10 +150,13 @@ export async function linkAppUser(
   `;
   if (existing.length > 0) {
     const row = existing[0] as { id: string; authUserId: string | null };
-    if (row.authUserId !== null || !identity.emailVerified) return { status: 'email-unverified' };
+    if (!identity.emailVerified) return { status: 'email-unverified' };
+    // A row linked to another auth user is taken over too: Neon Auth emails
+    // are unique and can't be changed, so that auth user was deleted (e.g.
+    // the account was recreated) and the reports belong to this address.
     const adopted = await db()`
       UPDATE users SET auth_user_id = ${identity.authUserId}
-      WHERE id = ${row.id} AND auth_user_id IS NULL
+      WHERE id = ${row.id} AND auth_user_id IS NOT DISTINCT FROM ${row.authUserId}
       RETURNING id
     `;
     if (adopted.length > 0) return { status: 'linked', userId: row.id };

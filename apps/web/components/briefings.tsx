@@ -17,7 +17,7 @@ import {
 } from '@panorist/core/format';
 import type { ReportWire, UserWithPreferencesWire } from '@panorist/core/types';
 import { authClient } from '../lib/client/auth.ts';
-import { api } from '../lib/client/api.ts';
+import { api, ApiError } from '../lib/client/api.ts';
 import { useClientValue } from '../lib/client/use-client-value.ts';
 import { ButtonLink, Eyebrow, Notice, Skeleton } from './ui.tsx';
 
@@ -31,7 +31,7 @@ const FILTERS: { id: Filter; label: string }[] = [
 
 type State =
   | { status: 'loading' }
-  | { status: 'error' }
+  | { status: 'error'; unverified: boolean }
   | { status: 'ready'; reports: ReportWire[]; prefs: UserWithPreferencesWire };
 
 const categoriesOf = (r: ReportWire) => r.content.map((c) => c.category);
@@ -48,7 +48,9 @@ export function Briefings() {
       ([reports, prefs]) => !cancelled && setState({ status: 'ready', reports, prefs }),
       (err) => {
         console.error('[briefings] load failed', err);
-        if (!cancelled) setState({ status: 'error' });
+        // 409: the email matches an existing account, and isn't verified yet.
+        const unverified = err instanceof ApiError && err.status === 409;
+        if (!cancelled) setState({ status: 'error', unverified });
       },
     );
     return () => {
@@ -89,7 +91,11 @@ export function Briefings() {
       <div className="mt-10">
         {state.status === 'loading' && <LoadingState />}
         {state.status === 'error' && (
-          <Notice>We couldn’t load your briefings. Refresh the page to try again.</Notice>
+          <Notice>
+            {state.unverified
+              ? 'This email already has a Panorist account. Verify your email to open it: sign out, then sign in with your email and password to get a code.'
+              : 'We couldn’t load your briefings. Refresh the page to try again.'}
+          </Notice>
         )}
         {state.status === 'ready' && (
           <>
