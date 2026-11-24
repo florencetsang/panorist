@@ -15,6 +15,7 @@ import {
   type ViewStyle,
 } from 'react-native';
 
+import { rules, sun, viewBox as brandViewBox } from '@panorist/core/brand';
 import { type as scale } from '@panorist/core/design';
 import { font, radius, space, useTheme } from './theme.ts';
 
@@ -232,20 +233,57 @@ export function Chip({
   );
 }
 
+/** The sunrise mark from @panorist/core/brand, built from Views (no SVG dependency). */
+export function Mark({ height = 20 }: { height?: number }) {
+  const { color } = useTheme();
+  const box = brandViewBox.mark;
+  const k = height / box.height;
+  const place = (r: { x: number; y: number; width: number; height: number }): ViewStyle => ({
+    position: 'absolute',
+    left: (r.x - box.x) * k,
+    top: (r.y - box.y) * k,
+    width: r.width * k,
+    height: r.height * k,
+  });
+  return (
+    <View
+      accessibilityElementsHidden
+      importantForAccessibility="no-hide-descendants"
+      style={{ width: box.width * k, height }}
+    >
+      <View
+        style={{
+          ...place({ x: sun.cx - sun.r, y: sun.cy - sun.r, width: 2 * sun.r, height: sun.r }),
+          backgroundColor: color.accent,
+          borderTopLeftRadius: sun.r * k,
+          borderTopRightRadius: sun.r * k,
+        }}
+      />
+      <View style={{ ...place(rules.horizon), backgroundColor: color.ink }} />
+      <View style={{ ...place(rules.line1), backgroundColor: color.inkFaint }} />
+      <View style={{ ...place(rules.line2), backgroundColor: color.inkFaint }} />
+    </View>
+  );
+}
+
+/** Logo lockup: mark + "Panorist." */
 export function Wordmark({ size = 28 }: { size?: number }) {
   const { color } = useTheme();
   return (
-    <RNText
-      style={{
-        fontFamily: font.serifSemibold,
-        fontSize: size,
-        color: color.ink,
-        letterSpacing: -0.5,
-      }}
-    >
-      Panorist
-      <RNText style={{ color: color.accent }}>.</RNText>
-    </RNText>
+    <View style={{ flexDirection: 'row', alignItems: 'center', gap: size * 0.35 }}>
+      <Mark height={size * 0.8} />
+      <RNText
+        style={{
+          fontFamily: font.serifSemibold,
+          fontSize: size,
+          color: color.ink,
+          letterSpacing: -0.5,
+        }}
+      >
+        Panorist
+        <RNText style={{ color: color.accent }}>.</RNText>
+      </RNText>
+    </View>
   );
 }
 

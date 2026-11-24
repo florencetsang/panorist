@@ -1,5 +1,6 @@
 /**
- * Generates every app icon from the SVG design below. Re-run after changing it:
+ * Generates every app icon from the mark in @panorist/core/brand. Re-run after
+ * changing it:
  *   node scripts/generate-icons.ts
  *
  * Outputs (all committed):
@@ -8,32 +9,33 @@
  *   app/apple-icon.png        180 px iOS home-screen icon (full-bleed; iOS rounds it)
  *   public/icons/icon-*.png   web manifest icons; maskable = full-bleed variant
  *   public/icons/badge-96.png monochrome Android notification badge
+ *   ../mobile/assets/         Expo app icon, Android adaptive foreground, splash
  */
 import { mkdirSync, writeFileSync } from 'node:fs';
 import sharp from 'sharp';
 
-const BACKGROUND = '#1c1917'; // stone-900
-const SUN = '#fbbf24'; // amber-400
-const HORIZON = '#fafaf9'; // stone-50
-const TEXT_LINE = '#a8a29e'; // stone-400
+import { markShapes, tile } from '@panorist/core/brand';
 
-type Variant = 'rounded' | 'full-bleed' | 'badge';
+type Variant = 'rounded' | 'full-bleed' | 'badge' | 'adaptive-foreground';
 
-// Sunrise over a horizon, with a "news line" beneath. All shapes sit within
-// the maskable safe zone (a centred circle of radius 0.4 × size).
+// All shapes sit within the maskable safe zone (a centred circle of radius
+// 0.4 × size). Android adaptive foregrounds are cropped harder (a 66/108
+// circle), so that variant shrinks the mark and leaves the ground to app.json.
 function iconSvg(variant: Variant): string {
-  const badge = variant === 'badge';
-  const background = badge
-    ? ''
-    : `<rect width="512" height="512" rx="${variant === 'rounded' ? 112 : 0}" fill="${BACKGROUND}"/>`;
-  const fill = (color: string): string => (badge ? '#ffffff' : color);
-  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
-  ${background}
-  <path d="M136 262a120 120 0 0 1 240 0z" fill="${fill(SUN)}"/>
-  <rect x="96" y="290" width="320" height="28" rx="14" fill="${fill(HORIZON)}"/>
-  ${badge ? '' : `<rect x="160" y="346" width="192" height="24" rx="12" fill="${TEXT_LINE}"/>`}
-</svg>
-`;
+  const background =
+    variant === 'rounded' || variant === 'full-bleed'
+      ? `<rect width="512" height="512" rx="${variant === 'rounded' ? tile.radius : 0}" fill="${tile.background}"/>`
+      : '';
+  const shapes =
+    variant === 'badge'
+      ? // Column lines are too thin to read at badge size.
+        markShapes({ sun: '#ffffff', horizon: '#ffffff', lines: 'none' })
+      : markShapes(tile);
+  const body =
+    variant === 'adaptive-foreground'
+      ? `<g transform="translate(256 256) scale(0.72) translate(-256 -256)">${shapes}</g>`
+      : shapes;
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">${background}${body}</svg>\n`;
 }
 
 const png = (svg: string, size: number): Promise<Buffer> =>
@@ -75,4 +77,10 @@ writeFileSync('public/icons/icon-192.png', await png(rounded, 192));
 writeFileSync('public/icons/icon-512.png', await png(rounded, 512));
 writeFileSync('public/icons/icon-maskable-512.png', await png(fullBleed, 512));
 writeFileSync('public/icons/badge-96.png', await png(iconSvg('badge'), 96));
+writeFileSync('../mobile/assets/icon.png', await png(fullBleed, 1024));
+writeFileSync(
+  '../mobile/assets/adaptive-icon.png',
+  await png(iconSvg('adaptive-foreground'), 1024),
+);
+writeFileSync('../mobile/assets/splash-icon.png', await png(rounded, 512));
 console.log('icons written');

@@ -73,7 +73,7 @@ first store build.
 | `npm run db:migrate` | Apply pending `apps/web/db/migrations/*.sql` |
 | `npm run db:setup` | `db:migrate` + `db/seed.sql` |
 | `npm run vapid:generate -w @panorist/web` | New VAPID keypair for web push |
-| `npm run icons:generate -w @panorist/web` | Regenerate favicon and app icons |
+| `npm run icons:generate -w @panorist/web` | Regenerate favicon, web and mobile app icons |
 | `npx expo export -p ios -p android` (in `apps/mobile`) | Bundle the app, to check it builds |
 
 Manual checks against real services (run in `apps/web`; both need `.env.local`):
