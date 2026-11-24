@@ -16,7 +16,9 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "db:migrate": "npm run db:migrate -w @panorist/web",
-    "db:setup": "npm run db:setup -w @panorist/web"
+    "db:setup": "npm run db:setup -w @panorist/web",
+    "db:migrate:prod": "npm run db:migrate:prod -w @panorist/web",
+    "db:setup:prod": "npm run db:setup:prod -w @panorist/web"
   },
   "devDependencies": {
     "prettier": "^3.10.1",

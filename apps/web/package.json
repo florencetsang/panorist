@@ -13,6 +13,8 @@
     "test:watch": "vitest",
     "db:migrate": "node scripts/migrate.ts",
     "db:setup": "node scripts/migrate.ts --seed",
+    "db:migrate:prod": "node scripts/migrate.ts --prod",
+    "db:setup:prod": "node scripts/migrate.ts --seed --prod",
     "vapid:generate": "web-push generate-vapid-keys",
     "icons:generate": "node scripts/generate-icons.ts"
   },

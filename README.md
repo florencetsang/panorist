@@ -72,6 +72,7 @@ first store build.
 | `npm test` | Vitest unit tests (`apps/web/test`, `packages/core/test`) — no database or network |
 | `npm run db:migrate` | Apply pending `apps/web/db/migrations/*.sql` |
 | `npm run db:setup` | `db:migrate` + `db/seed.sql` |
+| `npm run db:migrate:prod` / `db:setup:prod` | Same, against the database in `apps/web/.env.prod` |
 | `npm run vapid:generate -w @panorist/web` | New VAPID keypair for web push |
 | `npm run icons:generate -w @panorist/web` | Regenerate favicon, web and mobile app icons |
 | `npx expo export -p ios -p android` (in `apps/mobile`) | Bundle the app, to check it builds |

@@ -3,10 +3,11 @@
 // db/seed.sql afterwards.
 //
 // Usage: npm run db:migrate  |  npm run db:setup  (= migrate + seed)
+//        npm run db:migrate:prod  |  npm run db:setup:prod  (read .env.prod)
 //
 // Prefers DATABASE_URL_UNPOOLED: DDL belongs on Neon's direct endpoint.
 
-import { readdirSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { neon, type NeonQueryFunction } from '@neondatabase/serverless';
 
@@ -49,13 +50,16 @@ async function adoptLegacyDatabase(sql: Sql): Promise<void> {
 }
 
 async function main() {
-  loadEnvFile('.env.local');
-  loadEnvFile('.env');
+  const prod = process.argv.includes('--prod');
+  const envFiles = prod ? ['.env.prod'] : ['.env.local', '.env'];
+  if (prod && !existsSync(envFiles[0])) throw new Error('--prod given but .env.prod not found.');
+  envFiles.forEach(loadEnvFile);
   const url = process.env.DATABASE_URL_UNPOOLED || process.env.DATABASE_URL;
   if (!url)
     throw new Error(
-      'Set DATABASE_URL (or DATABASE_URL_UNPOOLED) in the environment or .env.local.',
+      `Set DATABASE_URL (or DATABASE_URL_UNPOOLED) in the environment or ${envFiles[0]}.`,
     );
+  if (prod) console.log(`Using .env.prod → ${new URL(url).host}`);
   const sql: Sql = neon(url);
 
   const firstRun = !(await exists(sql, 'schema_migrations'));
