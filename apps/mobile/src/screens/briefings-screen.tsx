@@ -76,7 +76,7 @@ export function BriefingsScreen() {
                 style={{
                   flexDirection: 'row',
                   justifyContent: 'space-between',
-                  alignItems: 'baseline',
+                  alignItems: 'center',
                 }}
               >
                 <Wordmark size={26} />

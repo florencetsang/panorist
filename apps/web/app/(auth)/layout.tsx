@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react';
+import { Mark } from '../../components/mark.tsx';
 import { Wordmark } from '../../components/wordmark.tsx';
 
 /** Signed-out pages: an editorial cover on wide screens, the form beside it. */
@@ -8,6 +9,7 @@ export default function AuthLayout({ children }: { children: ReactNode }) {
       <aside className="relative hidden flex-col justify-between overflow-hidden border-r border-rule bg-surface p-12 lg:flex">
         <Wordmark className="text-3xl" />
         <div className="max-w-md">
+          <Mark className="mb-8 h-14 w-auto" />
           <p className="eyebrow text-accent">Your morning edition</p>
           <p className="mt-4 font-serif text-5xl leading-[1.05] font-medium tracking-tight text-balance">
             The news you care about, read in minutes.

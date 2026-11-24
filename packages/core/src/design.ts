@@ -3,7 +3,8 @@
  * apps/web/app/globals.css mirror these) and mobile (used directly).
  *
  * Editorial: warm paper, near-black ink, one vermilion accent, serif
- * headlines (Newsreader) over a quiet sans (Inter) for UI text.
+ * headlines (Newsreader) over a quiet sans (Inter) for UI text. The logo
+ * mark (brand.ts) is drawn in this same palette.
  */
 
 export interface Palette {

@@ -29,7 +29,7 @@ export function AppHeader() {
   return (
     <header className="sticky top-0 z-30 border-b border-rule bg-paper/90 backdrop-blur supports-[backdrop-filter]:bg-paper/75">
       <div className="mx-auto flex max-w-3xl items-center justify-between gap-4 px-5 py-3 sm:px-8">
-        <div className="flex min-w-0 items-baseline gap-4">
+        <div className="flex min-w-0 items-center gap-4">
           <Wordmark className="text-2xl" />
           <span className="hidden truncate text-xs text-ink-faint sm:inline">{today}</span>
         </div>
